@@ -1,0 +1,28 @@
+package com.example.market.service;
+
+import com.example.market.entity.Goods;
+
+import java.util.List;
+
+public interface GoodsService {
+
+    Goods publish(Goods goods);
+
+    List<Goods> listOnSale();
+
+    List<Goods> search(String keyword);
+
+    Goods findById(Long id);
+
+    void updateStatus(Long id, Integer status);
+    List<Goods> listMyGoods(Long userId);
+    List<Goods> listPending();
+    void approve(Long id);
+    void reject(Long id);
+    void delete(Long id);
+
+    boolean decreaseStock(Long id, Integer quantity);
+
+    void increaseStock(Long id, Integer quantity);
+}
+

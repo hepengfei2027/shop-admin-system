@@ -1,0 +1,11 @@
+# SpringBoot后端过滤
+backend/target/
+backend/.idea/
+backend/*.iml
+# Vue前端关键：禁止上传node_modules（体积超大）
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+# 通用垃圾文件
+*.log
+.DS_Store

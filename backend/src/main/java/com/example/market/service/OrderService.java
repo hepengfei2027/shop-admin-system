@@ -1,0 +1,42 @@
+package com.example.market.service;
+
+import com.example.market.dto.OrderDetailDTO;
+import com.example.market.entity.Order;
+
+import java.util.List;
+
+public interface OrderService {
+
+    Order createOrder(java.lang.Long goodsId, java.lang.Long buyerId);
+
+    List<Order> listByBuyer(java.lang.Long buyerId);
+
+    List<Order> listBySeller(java.lang.Long sellerId);
+    
+    List<OrderDetailDTO> listAll();
+
+    void updateStatus(java.lang.Long id, Integer status);
+
+    void payOrder(java.lang.Long orderId, java.lang.Long buyerId);
+
+    void cancelOrder(java.lang.Long orderId, java.lang.Long userId);
+
+    void shipOrder(java.lang.Long orderId, java.lang.Long sellerId);
+
+    void confirmReceive(java.lang.Long orderId, java.lang.Long buyerId);
+
+    Order getById(java.lang.Long id);
+
+    void applyRefund(java.lang.Long orderId, java.lang.Long buyerId, String remark);
+
+    void approveRefund(java.lang.Long orderId, java.lang.Long sellerId);
+
+    void rejectRefund(java.lang.Long orderId, java.lang.Long sellerId, String remark);
+
+    void confirmShipRefund(java.lang.Long orderId, java.lang.Long buyerId);
+
+    void confirmReceiveRefund(java.lang.Long orderId, java.lang.Long sellerId);
+
+    void cancelRefund(java.lang.Long orderId, java.lang.Long buyerId);
+}
+

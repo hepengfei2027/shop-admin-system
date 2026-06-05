@@ -1,0 +1,14 @@
+package com.example.market.entity;
+
+import lombok.Data;
+import java.time.LocalDateTime;
+
+@Data
+public class CommentReply {
+
+    private Long id;
+    private Long commentId;
+    private Long userId;
+    private String content;
+    private LocalDateTime createTime;
+}
