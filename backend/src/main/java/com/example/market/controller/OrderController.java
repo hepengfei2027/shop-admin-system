@@ -19,8 +19,14 @@ public class OrderController {
 
     @PostMapping("/create")
     public Result<Order> create(@RequestParam java.lang.Long goodsId,
-                                @RequestParam java.lang.Long buyerId) {
-        return Result.ok(orderService.createOrder(goodsId, buyerId));
+                                @RequestParam java.lang.Long buyerId,
+                                @RequestParam(required = false) java.lang.Long addressId,
+                                @RequestParam(required = false, defaultValue = "1") Integer quantity,
+                                @RequestParam(required = false) java.lang.Long couponId,
+                                @RequestParam(required = false) Integer promotionType,
+                                @RequestParam(required = false) java.lang.Long promotionId,
+                                @RequestParam(required = false) java.math.BigDecimal promotionDiscount) {
+        return Result.ok(orderService.createOrder(goodsId, buyerId, addressId, quantity, couponId, promotionType, promotionId, promotionDiscount));
     }
 
     @GetMapping("/buyer/{buyerId}")
@@ -31,6 +37,16 @@ public class OrderController {
     @GetMapping("/seller/{sellerId}")
     public Result<List<Order>> listBySeller(@PathVariable java.lang.Long sellerId) {
         return Result.ok(orderService.listBySeller(sellerId));
+    }
+
+    @GetMapping("/buyer/{buyerId}/detail")
+    public Result<List<OrderDetailDTO>> listByBuyerWithDetails(@PathVariable java.lang.Long buyerId) {
+        return Result.ok(orderService.listByBuyerWithDetails(buyerId));
+    }
+
+    @GetMapping("/seller/{sellerId}/detail")
+    public Result<List<OrderDetailDTO>> listBySellerWithDetails(@PathVariable java.lang.Long sellerId) {
+        return Result.ok(orderService.listBySellerWithDetails(sellerId));
     }
 
     @PostMapping("/{id}/status")

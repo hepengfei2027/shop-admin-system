@@ -8,6 +8,9 @@ import java.util.List;
 @Mapper
 public interface AddressMapper {
 
+    @Select("SELECT * FROM addresses WHERE id = #{id}")
+    Address findById(Long id);
+
     @Select("SELECT * FROM addresses WHERE user_id = #{userId} ORDER BY is_default DESC, create_time DESC")
     List<Address> listByUserId(Long userId);
 

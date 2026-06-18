@@ -34,5 +34,17 @@ public class Goods {
      * 销量
      */
     private Integer sales = 0;
+    /**
+     * 商品分类
+     */
+    private String category;
+    /**
+     * 品牌名称
+     */
+    private String brandName;
+    /**
+     * 品牌标签底色
+     */
+    private String brandColor;
 }
 

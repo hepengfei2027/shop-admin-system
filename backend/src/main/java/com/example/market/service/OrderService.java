@@ -7,15 +7,22 @@ import java.util.List;
 
 public interface OrderService {
 
-    Order createOrder(java.lang.Long goodsId, java.lang.Long buyerId);
+    Order createOrder(java.lang.Long goodsId, java.lang.Long buyerId, java.lang.Long addressId, Integer quantity, java.lang.Long couponId,
+                      Integer promotionType, java.lang.Long promotionId, java.math.BigDecimal promotionDiscount);
 
     List<Order> listByBuyer(java.lang.Long buyerId);
 
     List<Order> listBySeller(java.lang.Long sellerId);
-    
+
+    List<OrderDetailDTO> listByBuyerWithDetails(java.lang.Long buyerId);
+
+    List<OrderDetailDTO> listBySellerWithDetails(java.lang.Long sellerId);
+
     List<OrderDetailDTO> listAll();
 
     void updateStatus(java.lang.Long id, Integer status);
+
+    void updateGroupStatus(java.lang.Long id, Integer groupStatus);
 
     void payOrder(java.lang.Long orderId, java.lang.Long buyerId);
 

@@ -8,6 +8,8 @@ const router = useRouter();
 const cartItems = ref<any[]>([]);
 const user = inject('user', ref<any>(null));
 
+const selectedItems = ref<Set<number>>(new Set());
+
 const getCartKey = () => {
   if (user.value) {
     return `cart_${user.value.id}`;
@@ -22,9 +24,9 @@ const loadCart = () => {
   } else {
     cartItems.value = [];
   }
+  selectedItems.value.clear();
 };
 
-// 监听用户状态变化，重新加载购物车
 watch(user, () => {
   loadCart();
 }, { deep: true });
@@ -42,6 +44,8 @@ const updateQuantity = (item: any, delta: number) => {
 };
 
 const removeItem = (index: number) => {
+  const item = cartItems.value[index];
+  selectedItems.value.delete(item.id);
   cartItems.value.splice(index, 1);
   localStorage.setItem(getCartKey(), JSON.stringify(cartItems.value));
   ElMessage.success('已从购物车中移除');
@@ -49,34 +53,61 @@ const removeItem = (index: number) => {
 
 const clearCart = () => {
   cartItems.value = [];
+  selectedItems.value.clear();
   localStorage.removeItem(getCartKey());
   ElMessage.success('购物车已清空');
 };
 
-const buyNow = async (item: any) => {
+const isSelected = (item: any) => selectedItems.value.has(item.id);
+
+const toggleSelect = (item: any) => {
+  if (selectedItems.value.has(item.id)) {
+    selectedItems.value.delete(item.id);
+  } else {
+    selectedItems.value.add(item.id);
+  }
+};
+
+const selectAll = () => {
+  if (selectedItems.value.size === cartItems.value.length) {
+    selectedItems.value.clear();
+  } else {
+    cartItems.value.forEach(item => selectedItems.value.add(item.id));
+  }
+};
+
+const selectedCount = computed(() => selectedItems.value.size);
+
+const selectedTotal = computed(() => {
+  return cartItems.value
+    .filter(item => selectedItems.value.has(item.id))
+    .reduce((total, item) => total + item.price * item.quantity, 0)
+    .toFixed(2);
+});
+
+const removeSelectedItems = () => {
+  if (selectedItems.value.size === 0) {
+    ElMessage.warning('请选择要移除的商品');
+    return;
+  }
+  cartItems.value = cartItems.value.filter(item => !selectedItems.value.has(item.id));
+  selectedItems.value.clear();
+  localStorage.setItem(getCartKey(), JSON.stringify(cartItems.value));
+  ElMessage.success('已移除选中商品');
+};
+
+const buySelected = async () => {
   if (!user.value) {
     ElMessage.warning('请先登录');
     router.push('/login');
     return;
   }
-
-  try {
-    const res = await api.createOrder(item.id, user.value.id);
-    if (res.data.code === 0) {
-      const orderId = res.data.data.id;
-      // 从购物车中移除该商品
-      const index = cartItems.value.findIndex(i => i.id === item.id);
-      if (index !== -1) {
-        cartItems.value.splice(index, 1);
-        localStorage.setItem(getCartKey(), JSON.stringify(cartItems.value));
-      }
-      router.push(`/payment/${orderId}`);
-    } else {
-      ElMessage.error(res.data.msg || '下单失败');
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.msg || '下单失败');
+  if (selectedItems.value.size === 0) {
+    ElMessage.warning('请选择商品');
+    return;
   }
+  const selectedIds = Array.from(selectedItems.value).join(',');
+  router.push(`/confirm-order?goodsIds=${selectedIds}`);
 };
 
 onMounted(loadCart);
@@ -92,7 +123,18 @@ onMounted(loadCart);
     </div>
     
     <div v-else>
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 10px">
+        <el-button type="danger" @click="removeSelectedItems">移除选中</el-button>
+      </div>
       <el-table :data="cartItems" style="width: 100%">
+        <el-table-column width="50">
+          <template #header>
+            <el-checkbox :checked="selectedCount === cartItems.length && cartItems.length > 0" @change="selectAll" />
+          </template>
+          <template #default="scope">
+            <el-checkbox :checked="isSelected(scope.row)" @change="toggleSelect(scope.row)" />
+          </template>
+        </el-table-column>
         <el-table-column label="商品图片">
           <template #default="scope">
             <img v-if="scope.row.imageUrl" :src="scope.row.imageUrl" alt="商品图片" style="width: 80px; height: 80px; object-fit: cover" />
@@ -114,18 +156,15 @@ onMounted(loadCart);
             ￥{{ (scope.row.price * scope.row.quantity).toFixed(2) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作">
-          <template #default="scope">
-            <el-button type="primary" size="small" @click="buyNow(scope.row)">立即购买</el-button>
-            <el-button type="danger" size="small" @click="removeItem(scope.$index)">移除</el-button>
-          </template>
-        </el-table-column>
+
       </el-table>
       
       <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center">
         <el-button type="warning" @click="clearCart">清空购物车</el-button>
         <div>
-          <span style="font-size: 18px; margin-right: 20px">总计：￥{{ totalPrice }}</span>
+          <span v-if="selectedCount > 0" style="font-size: 16px; margin-right: 15px">已选 {{ selectedCount }} 件，共 ￥{{ selectedTotal }}</span>
+          <el-button v-if="selectedCount > 0" type="primary" @click="buySelected">批量下单</el-button>
+          <span style="font-size: 18px; margin-left: 20px">总计：￥{{ totalPrice }}</span>
         </div>
       </div>
     </div>

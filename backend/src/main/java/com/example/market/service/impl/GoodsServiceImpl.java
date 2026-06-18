@@ -16,6 +16,10 @@ public class GoodsServiceImpl implements GoodsService {
 
     @Override
     public Goods publish(Goods goods) {
+        if (goods.getId() != null) {
+            update(goods);
+            return goodsMapper.findById(goods.getId());
+        }
         if (goods.getStatus() == null) {
             goods.setStatus(0);
         }
@@ -31,6 +35,16 @@ public class GoodsServiceImpl implements GoodsService {
     @Override
     public List<Goods> search(String keyword) {
         return goodsMapper.search(keyword);
+    }
+
+    @Override
+    public List<Goods> listBrands() {
+        return goodsMapper.listBrands();
+    }
+
+    @Override
+    public List<Goods> searchWithFilter(String keyword, String brand, java.math.BigDecimal minPrice, java.math.BigDecimal maxPrice) {
+        return goodsMapper.searchWithFilter(keyword, brand, minPrice, maxPrice);
     }
 
     @Override
@@ -77,6 +91,27 @@ public class GoodsServiceImpl implements GoodsService {
     @Override
     public void increaseStock(Long id, Integer quantity) {
         goodsMapper.increaseStock(id, quantity);
+    }
+
+    @Override
+    public void update(Goods goods) {
+        if (goods.getId() == null) {
+            throw new RuntimeException("商品ID不能为空");
+        }
+        Goods existing = goodsMapper.findById(goods.getId());
+        if (existing == null) {
+            throw new RuntimeException("商品不存在");
+        }
+        if (goods.getSellerId() != null && !goods.getSellerId().equals(existing.getSellerId())) {
+            throw new RuntimeException("无权编辑该商品");
+        }
+        if (goods.getStatus() == null) {
+            goods.setStatus(existing.getStatus());
+        }
+        int updated = goodsMapper.update(goods);
+        if (updated <= 0) {
+            throw new RuntimeException("商品更新失败");
+        }
     }
 
 }

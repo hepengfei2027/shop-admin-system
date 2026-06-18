@@ -12,6 +12,10 @@ public interface GoodsService {
 
     List<Goods> search(String keyword);
 
+    List<Goods> listBrands();
+
+    List<Goods> searchWithFilter(String keyword, String brand, java.math.BigDecimal minPrice, java.math.BigDecimal maxPrice);
+
     Goods findById(Long id);
 
     void updateStatus(Long id, Integer status);
@@ -24,5 +28,7 @@ public interface GoodsService {
     boolean decreaseStock(Long id, Integer quantity);
 
     void increaseStock(Long id, Integer quantity);
+
+    void update(Goods goods);
 }
 

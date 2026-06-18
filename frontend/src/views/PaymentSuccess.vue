@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue';
+import { ref, onMounted, nextTick, inject, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '../api';
 
 const route = useRoute();
 const router = useRouter();
+const user = inject('user', ref<any>(null));
 
 const orderId = ref('');
 const orderInfo = ref<any>(null);
 const showNotif = ref(false);
 const showSuccessAnimation = ref(false);
+const goodsInfo = ref<any>(null);
 
 const statusMap: Record<number, string> = {
   0: '待付款',
@@ -19,12 +21,35 @@ const statusMap: Record<number, string> = {
   4: '已取消'
 };
 
+const showMemberPrice = computed(() => {
+  const discount = user.value?.discount;
+  return discount !== undefined && discount !== null && discount < 1;
+});
+
+const getMemberDiscount = () => {
+  return (user.value?.discount !== undefined && user.value?.discount !== null) ? user.value.discount : 1;
+};
+
+const loadGoodsInfo = async (goodsId: number) => {
+  try {
+    const res = await api.getGoodsDetail(goodsId);
+    if (res.data.code === 0) {
+      goodsInfo.value = res.data.data;
+    }
+  } catch (err) {
+    console.error('加载商品信息失败', err);
+  }
+};
+
 const loadOrderInfo = async () => {
   try {
     orderId.value = route.params.id as string;
     const res = await api.getOrderInfo(orderId.value);
     if (res.data.code === 0) {
       orderInfo.value = res.data.data;
+      if (orderInfo.value?.goodsId) {
+        await loadGoodsInfo(orderInfo.value.goodsId);
+      }
     }
   } catch (err) {
     console.error('加载订单失败');
@@ -70,14 +95,41 @@ onMounted(async () => {
     </div>
 
     <!-- 支付金额显示 -->
-    <div :class="['price-display', { show: showSuccessAnimation }]" v-if="orderInfo">
-     
+  <div :class="['price-display', { show: showSuccessAnimation }]" v-if="orderInfo">
+    <div class="order-number">订单号：{{ orderId }}</div>
+    <div class="price-wrapper">
+      <div v-if="goodsInfo && showMemberPrice" class="original-price-line">
+        <span class="price-label-text">原价</span>
+        <span class="original-amount">￥{{ goodsInfo.price.toFixed(2) }}</span>
+      </div>
+      <!-- 营销活动优惠 -->
+      <div v-if="orderInfo.promotionDiscount && orderInfo.promotionDiscount > 0" class="promotion-discount-line">
+        <span class="price-label-text">
+          <span v-if="orderInfo.promotionType === 1">满减优惠</span>
+          <span v-if="orderInfo.promotionType === 2">限时折扣</span>
+          <span v-if="orderInfo.promotionType === 3">团购优惠</span>
+        </span>
+        <span class="promotion-discount">-￥{{ orderInfo.promotionDiscount.toFixed(2) }}</span>
+      </div>
+      <div v-if="orderInfo.couponAmount && orderInfo.couponAmount > 0" class="coupon-discount-line">
+        <span class="price-label-text">优惠券抵扣</span>
+        <span class="coupon-discount">-￥{{ orderInfo.couponAmount.toFixed(2) }}</span>
+      </div>
       <div class="price-value">
         <span class="currency">￥</span>
-        <span class="amount">{{ orderInfo.totalAmount || orderInfo.amount || 0 }}</span>
+        <span class="amount">{{ Number(orderInfo.amount).toFixed(2) }}</span>
       </div>
-
+      <div v-if="showMemberPrice" class="member-price-info">
+        <span class="member-tag">会员价</span>
+        <span class="member-discount">({{ (getMemberDiscount() * 100).toFixed(0) }}折)</span>
+      </div>
+      <!-- 团购状态提示 -->
+      <div v-if="orderInfo.promotionType === 3 && orderInfo.groupStatus === 0" class="group-status-info">
+        <span class="group-tag">⏳ 等待拼团</span>
+        <span class="group-hint">拼团成功后订单将生效</span>
+      </div>
     </div>
+  </div>
     
     <!-- 操作按钮 -->
     <div :class="['action-buttons', { show: showSuccessAnimation }]">
@@ -216,6 +268,13 @@ onMounted(async () => {
   transform: translateY(0);
 }
 
+.order-number {
+  font-size: 14px;
+  color: #9ca3af;
+  margin-bottom: 16px;
+  font-weight: 400;
+}
+
 .price-label {
   font-size: 16px;
   color: #6b7280;
@@ -228,6 +287,100 @@ onMounted(async () => {
   justify-content: center;
   gap: 6px;
   margin-bottom: 16px;
+}
+
+.price-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.original-price-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0.7;
+}
+
+.price-label-text {
+  font-size: 14px;
+  color: #6b7280;
+}
+
+.original-amount {
+  font-size: 18px;
+  color: #9ca3af;
+  text-decoration: line-through;
+}
+
+.member-price-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.member-tag {
+  background: linear-gradient(135deg, #ff1744 0%, #ff5252 100%);
+  color: white;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.member-discount {
+  font-size: 14px;
+  color: #ff1744;
+  font-weight: 600;
+}
+
+.coupon-discount-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0.7;
+}
+
+.coupon-discount {
+  font-size: 18px;
+  color: #4caf50;
+  font-weight: 600;
+}
+
+.promotion-discount-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0.7;
+}
+
+.promotion-discount {
+  font-size: 18px;
+  color: #ff6700;
+  font-weight: 600;
+}
+
+.group-status-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.group-tag {
+  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+  color: white;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.group-hint {
+  font-size: 12px;
+  color: #909399;
 }
 
 .currency {

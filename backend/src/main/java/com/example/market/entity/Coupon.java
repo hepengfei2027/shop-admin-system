@@ -10,8 +10,14 @@ public class Coupon {
     private Double amount;
     private Long issuerId;
     private Long userId;
-    private Integer status; // 0: 未领取, 1: 已领取未使用, 2: 已使用
+    private Integer status;
     private LocalDateTime createTime;
     private LocalDateTime claimTime;
     private LocalDateTime useTime;
+    private Integer type;
+    private LocalDateTime expireTime;
+    private Double minAmount;
+    private Integer totalCount;
+    private Integer claimedCount;
+    private Integer perUserLimit;
 }

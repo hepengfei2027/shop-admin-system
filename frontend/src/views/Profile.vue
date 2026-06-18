@@ -6,8 +6,18 @@ import { useRouter } from 'vue-router';
 
 const router = useRouter();
 const user = ref<any>(null);
-const myGoods = ref<any[]>([]);
 const addresses = ref<any[]>([]);
+const orders = ref<any[]>([]);
+const coupons = ref<any[]>([]);
+
+const memberInfo = ref({
+  level: 1,
+  levelName: '普通VIP',
+  experience: 0,
+  nextLevelExp: 100,
+  totalConsumption: 0,
+  discount: 1
+});
 
 const avatarUploading = ref(false);
 const avatarPreview = ref('');
@@ -19,6 +29,40 @@ const profileForm = ref<any>({
   avatar: ''
 });
 const profileAvatarUploading = ref(false);
+
+const memberLevels = [
+  { level: 1, name: '青铜VIP', minExp: 0, maxExp: 100, discount: 1, color: '#9ca3af', icon: '⭐' },
+  { level: 2, name: '白银VIP', minExp: 100, maxExp: 500, discount: 0.98, color: '#6b7280', icon: '🥈' },
+  { level: 3, name: '黄金VIP', minExp: 500, maxExp: 2000, discount: 0.95, color: '#f59e0b', icon: '🥇' },
+  { level: 4, name: '铂金VIP', minExp: 2000, maxExp: 5000, discount: 0.92, color: '#a78bfa', icon: '💎' },
+  { level: 5, name: '钻石VIP', minExp: 5000, maxExp: 10000, discount: 0.88, color: '#06b6d4', icon: '💠' },
+  { level: 6, name: '至尊VIP', minExp: 10000, maxExp: Infinity, discount: 0.85, color: '#ec4899', icon: '👑' }
+];
+
+const calculateMemberLevel = (experience: number) => {
+  for (let i = memberLevels.length - 1; i >= 0; i--) {
+    if (experience >= memberLevels[i].minExp) {
+      return memberLevels[i];
+    }
+  }
+  return memberLevels[0];
+};
+
+const calculateExpFromOrders = (orders: any[]) => {
+  let totalExp = 0;
+  let totalConsumption = 0;
+  
+  orders.forEach(order => {
+    // status=3 表示已完成
+    if (order.status === 3) {
+      const amount = order.amount || order.price || 0;
+      totalConsumption += Number(amount);
+      totalExp += Math.floor(Number(amount));
+    }
+  });
+  
+  return { totalExp, totalConsumption };
+};
 
 const openProfileDialog = () => {
   if (user.value) {
@@ -112,17 +156,6 @@ const triggerAvatarUpload = () => {
     input.click();
   }
 };
-
-const editDialogVisible = ref(false);
-const editForm = ref<any>({
-  id: '',
-  title: '',
-  description: '',
-  imageUrl: '',
-  price: 0,
-  freight: 0
-});
-const uploading = ref(false);
 
 const addressDialogVisible = ref(false);
 const isEditAddress = ref(false);
@@ -578,7 +611,7 @@ const closeAddressDialog = () => {
   addressDialogVisible.value = false;
 };
 
-const loadProfile = () => {
+const loadProfile = async () => {
   const userStr = localStorage.getItem('user');
   if (!userStr) {
     ElMessage.warning('请先登录');
@@ -586,70 +619,83 @@ const loadProfile = () => {
     return;
   }
   user.value = JSON.parse(userStr);
-  loadMyGoods();
-  loadAddresses();
-};
-
-const loadMyGoods = async () => {
-  if (!user.value?.id) return;
+  
   try {
-    const res = await api.listMyGoods(user.value.id);
-    myGoods.value = res.data.data || [];
-  } catch (e) {
-    ElMessage.error('加载我的商品失败');
-  }
-};
-
-const offGoods = async (id: number) => {
-  try {
-    await api.updateGoodsStatus(id, 2);
-    ElMessage.success('商品已下架');
-    loadMyGoods();
-  } catch (err) {
-    ElMessage.error('下架失败');
-  }
-};
-
-const deleteGoods = async (id: number) => {
-  try {
-    await ElMessageBox.confirm('确定要删除这个商品吗？', '删除商品', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning'
-    });
-    await api.deleteGoods(id);
-    ElMessage.success('商品已删除');
-    loadMyGoods();
-  } catch (err) {
-  }
-};
-
-const editGoods = async (goods: any) => {
-  try {
-    const res = await api.getGoodsDetail(goods.id);
-    if (res.data.code === 0) {
-      editForm.value = res.data.data;
-      editDialogVisible.value = true;
+    const res = await api.getUserInfo(user.value.id);
+    if (res.data.code === 0 && res.data.data) {
+      user.value = { ...user.value, ...res.data.data };
+      localStorage.setItem('user', JSON.stringify(user.value));
     }
   } catch (err) {
-    ElMessage.error('获取商品详情失败');
+    console.error('获取用户信息失败', err);
+  }
+  
+  loadAddresses();
+  loadOrders();
+  loadCoupons();
+};
+
+const loadCoupons = async () => {
+  if (!user.value?.id) return;
+  try {
+    const res = await api.getUserCoupons(user.value.id);
+    if (res.data.code === 0) {
+      coupons.value = res.data.data || [];
+    }
+  } catch (err) {
+    console.error('加载优惠券失败', err);
+    coupons.value = [];
   }
 };
 
-const saveEdit = async () => {
+const loadOrders = async () => {
+  if (!user.value?.id) return;
   try {
-    const payload = {
-      ...editForm.value,
-      status: 0,
-      sellerId: user.value.id
-    };
-    await api.publishGoods(payload);
-    ElMessage.success('商品已更新，等待审核');
-    editDialogVisible.value = false;
-    loadMyGoods();
+    const res = await api.listBuyerOrders(user.value.id);
+    if (res.data.code === 0) {
+      orders.value = res.data.data || [];
+    } else if (Array.isArray(res.data)) {
+      orders.value = res.data;
+    } else {
+      orders.value = [];
+    }
+    updateMemberInfo();
   } catch (err) {
-    ElMessage.error('更新失败');
+    console.error('加载订单失败', err);
+    orders.value = [];
   }
+};
+
+const updateMemberInfo = () => {
+  // 从后端用户数据获取会员信息
+  const userExperience = user.value?.experience || 0;
+  const userLevel = user.value?.memberLevel || 1;
+  const userDiscount = user.value?.discount || 1;
+  
+  // 从订单计算累计消费金额
+  const { totalConsumption } = calculateExpFromOrders(orders.value);
+  
+  // 根据经验值获取等级信息
+  const levelInfo = calculateMemberLevel(userExperience);
+  
+  const currentExp = userExperience - levelInfo.minExp;
+  const nextExp = levelInfo.maxExp === Infinity ? null : levelInfo.maxExp - levelInfo.minExp;
+  
+  const icon = levelInfo.icon;
+  const color = levelInfo.color;
+  const levelName = levelInfo.name;
+  
+  memberInfo.value = {
+    level: userLevel,
+    levelName: levelName,
+    experience: userExperience,
+    nextLevelExp: nextExp,
+    totalConsumption: totalConsumption,
+    discount: userDiscount,
+    currentExp: currentExp,
+    icon: icon,
+    color: color
+  };
 };
 
 const handleAvatarUpload = async (event: Event) => {
@@ -774,9 +820,19 @@ onMounted(loadProfile);
           
           <div class="user-details">
             <h2 class="user-name">{{ user?.nickname || user?.username || '未设置' }}</h2>
-            <p class="user-role" :class="user?.role === 2 ? 'seller' : 'buyer'">
-              {{ user?.role === 2 ? '卖家' : '买家' }}
-            </p>
+            <div class="user-tags">
+              <span class="user-role" :class="user?.role === 2 ? 'seller' : 'buyer'">
+                {{ user?.role === 2 ? '卖家' : '买家' }}
+              </span>
+              <span 
+                v-if="user?.role !== 2" 
+                class="member-badge" 
+                :style="{ background: memberInfo.color + '20', color: memberInfo.color, borderColor: memberInfo.color }"
+              >
+                <span class="member-icon">{{ memberInfo.icon }}</span>
+                {{ memberInfo.levelName }}
+              </span>
+            </div>
             <div class="user-meta">
               <div class="meta-item">
                 <span class="meta-label">用户名</span>
@@ -785,6 +841,56 @@ onMounted(loadProfile);
               <div class="meta-item">
                 <span class="meta-label">手机号</span>
                 <span class="meta-value">{{ user?.phone || '未设置' }}</span>
+              </div>
+            </div>
+            <div v-if="user?.role !== 2" class="member-info">
+              <div class="member-stats">
+                <div class="stat-item">
+                  <span class="stat-value">{{ memberInfo.experience }}</span>
+                  <span class="stat-label">经验值</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-value">¥{{ memberInfo.totalConsumption.toFixed(2) }}</span>
+                  <span class="stat-label">累计消费</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-value">{{ (memberInfo.discount * 100).toFixed(0) }}%</span>
+                  <span class="stat-label">专属折扣</span>
+                </div>
+              </div>
+              <!-- 经验值可视化进度条 -->
+              <div class="exp-visual-container">
+                <div class="exp-header">
+                  <span class="exp-current-level" :style="{ color: memberInfo.color }">
+                    {{ memberInfo.icon }} {{ memberInfo.levelName }}
+                  </span>
+                  <span v-if="memberInfo.nextLevelExp !== null" class="exp-next-level">
+                    距离下一等级还需 <strong>{{ memberInfo.nextLevelExp - memberInfo.currentExp }}</strong> 经验
+                  </span>
+                  <span v-else class="exp-max-level">已达到最高等级</span>
+                </div>
+                <div class="exp-bar-wrapper">
+                  <div class="exp-bar-bg">
+                    <div 
+                      class="exp-bar-fill" 
+                      :style="{ 
+                        width: memberInfo.nextLevelExp !== null 
+                          ? (memberInfo.currentExp / memberInfo.nextLevelExp * 100) + '%' 
+                          : '100%',
+                        background: `linear-gradient(90deg, ${memberInfo.color}, ${memberInfo.color}dd)`
+                      }"
+                    >
+                      <div class="exp-bar-shine"></div>
+                    </div>
+                  </div>
+                  <div class="exp-bar-labels">
+                    <span class="exp-label-start">{{ memberInfo.experience - memberInfo.currentExp }}</span>
+                    <span v-if="memberInfo.nextLevelExp !== null" class="exp-label-end">
+                      {{ memberInfo.experience - memberInfo.currentExp + memberInfo.nextLevelExp }}
+                    </span>
+                    <span v-else class="exp-label-end">MAX</span>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="user-actions">
@@ -797,69 +903,35 @@ onMounted(loadProfile);
     </div>
 
     <div class="profile-content">
-      <el-card v-if="user && user.role === 2" class="content-card">
+      <el-card v-if="user && user.role !== 2" class="content-card member-benefits-card">
         <div class="card-header">
-          <h3 class="card-title">我发布的商品</h3>
-          <span class="card-count">{{ myGoods.length }} 件</span>
+          <h3 class="card-title">会员权益</h3>
+          <span class="current-level" :style="{ color: memberInfo.color }">
+            当前等级: {{ memberInfo.icon }} {{ memberInfo.levelName }}
+          </span>
         </div>
-        <el-table 
-          :data="myGoods" 
-          border 
-          class="goods-table"
-          :empty-text="myGoods.length === 0 ? '暂无商品' : ''"
-        >
-          <el-table-column label="商品图片" width="120">
-            <template #default="scope">
-              <div class="goods-image-wrapper">
-                <img 
-                  v-if="scope.row.imageUrl" 
-                  :src="scope.row.imageUrl" 
-                  alt="商品图片" 
-                  class="goods-image"
-                />
-                <span v-else class="no-image">无图片</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="商品标题" prop="title" min-width="150" />
-          <el-table-column label="价格" prop="price" width="100">
-            <template #default="scope">
-              <span class="price">¥{{ scope.row.price }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="库存" prop="stock" width="80" />
-          <el-table-column label="是否包邮" width="100">
-            <template #default="scope">
-              <el-tag :type="(!scope.row.freight || scope.row.freight === 0) ? 'success' : 'info'" size="small">
-                {{ (!scope.row.freight || scope.row.freight === 0) ? '包邮' : '不包邮' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="100">
-            <template #default="scope">
-              <el-tag 
-                :type="scope.row.status === 0 ? 'warning' : scope.row.status === 1 ? 'success' : 'danger'"
-                size="small"
-              >
-                {{ scope.row.status === 0 ? '审核中' : scope.row.status === 1 ? '已上架' : '已下架' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="200">
-            <template #default="scope">
-              <div class="table-actions">
-                <el-button 
-                  v-if="scope.row.status === 1" 
-                  size="small" 
-                  type="warning" 
-                  @click="offGoods(scope.row.id)"
-                >下架</el-button>
-                <el-button size="small" type="primary" @click="editGoods(scope.row)">编辑</el-button>
-                <el-button size="small" type="danger" @click="deleteGoods(scope.row.id)">删除</el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
+        <div class="benefits-grid">
+          <div 
+            v-for="level in memberLevels" 
+            :key="level.level" 
+            class="benefit-card"
+            :class="{ 'current-level': level.level === memberInfo.level, 'locked': level.level > memberInfo.level }"
+          >
+            <div class="benefit-icon">{{ level.icon }}</div>
+            <div class="benefit-name">{{ level.name }}</div>
+            <div class="benefit-discount">
+              <span class="discount-label">折扣</span>
+              <span class="discount-value">{{ (level.discount * 100).toFixed(0) }}%</span>
+            </div>
+            <div class="benefit-requirements">
+              <span v-if="level.minExp === 0">初始等级</span>
+              <span v-else-if="level.maxExp === Infinity">最高等级</span>
+              <span v-else>满 {{ level.minExp }} 经验</span>
+            </div>
+            <div v-if="level.level === memberInfo.level" class="current-badge">当前</div>
+            <div v-else-if="level.level > memberInfo.level" class="locked-badge">🔒</div>
+          </div>
+        </div>
       </el-card>
 
       <el-card class="content-card">
@@ -903,53 +975,46 @@ onMounted(loadProfile);
           </div>
         </div>
       </el-card>
-    </div>
 
-    <el-dialog
-        v-model="editDialogVisible"
-        title="编辑商品"
-        width="600px"
-        class="custom-dialog"
-    >
-      <el-form label-width="80px">
-        <el-form-item label="标题">
-          <el-input v-model="editForm.title" placeholder="请输入商品标题" />
-        </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="editForm.description" type="textarea" :rows="4" placeholder="请输入商品描述" />
-        </el-form-item>
-        <el-form-item label="商品图片">
-          <el-upload
-              :show-file-list="false"
-              :before-upload="beforeUpload"
-              :on-change="onFileChange"
-          >
-            <el-button :loading="uploading" type="primary">选择图片</el-button>
-          </el-upload>
-          <div v-if="editForm.imageUrl" class="image-preview">
-            <span>预览：</span>
-            <img
-                :src="editForm.imageUrl"
-                alt="预览图片"
-                class="preview-image"
-            />
+      <el-card class="content-card coupon-card-container">
+        <div class="card-header">
+          <h3 class="card-title">我的优惠券</h3>
+          <span class="card-count">{{ coupons.length }} 张</span>
+        </div>
+        <div v-if="coupons.length === 0" class="empty-state">
+          <div class="empty-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+              <line x1="7" y1="7" x2="7.01" y2="7"/>
+            </svg>
           </div>
-        </el-form-item>
-        <el-form-item label="价格">
-          <el-input-number v-model="editForm.price" :min="0" :step="1" />
-        </el-form-item>
-        <el-form-item label="运费">
-          <el-input-number v-model="editForm.freight" :min="0" :step="1" />
-          <span class="hint-text">不填默认包邮</span>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="editDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="saveEdit">保存</el-button>
-        </span>
-      </template>
-    </el-dialog>
+          <p>暂无优惠券</p>
+          <p class="empty-tip">去商品详情页领取优惠券吧</p>
+        </div>
+        <div v-else class="coupon-grid">
+          <div
+            v-for="coupon in coupons"
+            :key="coupon.id"
+            class="coupon-card-item"
+          >
+            <div class="coupon-left-section">
+              <span class="coupon-amount-value">￥{{ coupon.amount }}</span>
+              <span v-if="coupon.minAmount && coupon.minAmount > 0" class="coupon-condition">满{{ coupon.minAmount }}可用</span>
+            </div>
+            <div class="coupon-right-section">
+              <div class="coupon-type-badge">{{ coupon.type === 0 ? '通用券' : '商品券' }}</div>
+              <div class="coupon-applicable-info">
+                {{ coupon.type === 0 ? '全店通用' : '指定商品' }}
+              </div>
+              <div class="coupon-expire-info">有效期至 {{ new Date(coupon.expireTime).toLocaleDateString() }}</div>
+              <div class="coupon-status" :class="{ used: coupon.userCouponStatus === 1 }">
+                {{ coupon.userCouponStatus === 1 ? '已使用' : '未使用' }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </el-card>
+    </div>
 
     <el-dialog v-model="profileDialogVisible" title="编辑个人信息" width="500px" class="custom-dialog">
       <el-form label-width="80px">
@@ -1047,14 +1112,12 @@ onMounted(loadProfile);
 .profile-container {
   min-height: 100vh;
   background: #f5f5f5;
-  padding: 40px 20px;
+  padding: 16px;
 }
 
 .profile-card {
   background: white;
-  border-radius: 20px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-  overflow: hidden;
+  border: 1px solid #e0e0e0;
   max-width: 900px;
   margin: 0 auto;
 }
@@ -1062,8 +1125,9 @@ onMounted(loadProfile);
 .user-info-section {
   display: flex;
   align-items: flex-start;
-  padding: 40px;
-  gap: 40px;
+  padding: 20px;
+  gap: 20px;
+  border-bottom: 1px solid #e0e0e0;
 }
 
 .avatar-wrapper {
@@ -1072,17 +1136,11 @@ onMounted(loadProfile);
 }
 
 .avatar {
-  width: 150px;
-  height: 150px;
-  border-radius: 50%;
+  width: 100px;
+  height: 100px;
+  border-radius: 0;
   object-fit: cover;
-  border: 4px solid #f0f0f0;
-  transition: transform 0.3s ease, border-color 0.3s ease;
-}
-
-.avatar:hover {
-  transform: scale(1.05);
-  border-color: #409eff;
+  border: 1px solid #e0e0e0;
 }
 
 .avatar-overlay {
@@ -1092,13 +1150,11 @@ onMounted(loadProfile);
   transform: translate(-50%, -50%);
   width: 100%;
   height: 100%;
-  border-radius: 50%;
   background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 0.3s ease;
   cursor: pointer;
 }
 
@@ -1108,52 +1164,50 @@ onMounted(loadProfile);
 
 .upload-icon {
   color: white;
-  font-size: 24px;
+  font-size: 20px;
 }
 
 .upload-btn {
   position: absolute;
-  bottom: -35px;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: -30px;
+  left: 0;
   white-space: nowrap;
 }
 
 .user-details {
   flex: 1;
-  padding-top: 20px;
+  padding-top: 0;
 }
 
 .user-name {
-  font-size: 28px;
-  font-weight: 700;
-  color: #1f2937;
+  font-size: 20px;
+  font-weight: 600;
+  color: #333;
   margin: 0 0 8px 0;
 }
 
 .user-role {
   display: inline-block;
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 14px;
+  padding: 2px 10px;
+  font-size: 12px;
   font-weight: 500;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 
 .user-role.seller {
-  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  background: #ff9800;
   color: white;
 }
 
 .user-role.buyer {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  background: #43a047;
   color: white;
 }
 
 .user-meta {
   display: flex;
-  gap: 30px;
-  margin-bottom: 25px;
+  gap: 24px;
+  margin-bottom: 12px;
 }
 
 .meta-item {
@@ -1162,94 +1216,257 @@ onMounted(loadProfile);
 }
 
 .meta-label {
-  font-size: 13px;
-  color: #9ca3af;
-  margin-bottom: 4px;
+  font-size: 12px;
+  color: #999;
+  margin-bottom: 2px;
 }
 
 .meta-value {
-  font-size: 16px;
-  color: #374151;
+  font-size: 14px;
+  color: #333;
   font-weight: 500;
 }
 
 .user-actions {
   display: flex;
-  gap: 12px;
+  gap: 8px;
+}
+
+.user-tags {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.member-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid;
+}
+
+.member-icon {
+  font-size: 14px;
+}
+
+.member-info {
+  background: #fafafa;
+  border: 1px solid #e0e0e0;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.member-stats {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 12px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #999;
+  margin-top: 2px;
+}
+
+.exp-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.progress-bar {
+  height: 6px;
+  background: #e0e0e0;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  transition: width 0.5s ease;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: #999;
+}
+
+.exp-visual-container {
+  margin-top: 8px;
+  padding: 12px;
+  background: white;
+  border: 1px solid #e0e0e0;
+}
+
+.exp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.exp-current-level {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.exp-next-level {
+  font-size: 12px;
+  color: #999;
+}
+
+.exp-next-level strong {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.exp-max-level {
+  font-size: 12px;
+  color: #43a047;
+  font-weight: 500;
+}
+
+.exp-bar-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.exp-bar-bg {
+  height: 12px;
+  background: #e0e0e0;
+  overflow: hidden;
+  position: relative;
+}
+
+.exp-bar-fill {
+  height: 100%;
+  transition: width 0.8s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.exp-bar-shine {
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.4),
+    transparent
+  );
+  animation: shine 2s infinite;
+}
+
+@keyframes shine {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.exp-bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #999;
+}
+
+.exp-label-start {
+  font-weight: 500;
+  color: #666;
+}
+
+.exp-label-end {
+  font-weight: 600;
+  color: #333;
 }
 
 .user-actions .el-button {
-  padding: 10px 24px;
-  border-radius: 8px;
+  padding: 6px 16px;
   font-weight: 500;
 }
 
 .profile-content {
   max-width: 900px;
-  margin: 30px auto 0;
+  margin: 12px auto 0;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 12px;
 }
 
 .content-card {
   background: white;
-  border-radius: 16px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
-  border: none;
+  border: 1px solid #e0e0e0;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px 16px;
-  border-bottom: 1px solid #f3f4f6;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #fafafa;
 }
 
 .card-title {
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 600;
-  color: #1f2937;
+  color: #333;
   margin: 0;
 }
 
 .card-count {
-  font-size: 14px;
-  color: #6b7280;
-  background: #f3f4f6;
-  padding: 4px 12px;
-  border-radius: 20px;
+  font-size: 12px;
+  color: #666;
+  background: #f0f0f0;
+  padding: 2px 8px;
 }
 
 .add-btn {
-  border-radius: 8px;
-  padding: 6px 16px;
+  padding: 4px 12px;
 }
 
 .goods-table {
-  --el-table-header-text-color: #6b7280;
-  --el-table-row-hover-bg-color: #f9fafb;
+  --el-table-header-text-color: #666;
+  --el-table-row-hover-bg-color: #fafafa;
 }
 
 .goods-table :deep(.el-table__header) {
-  background: #f9fafb;
+  background: #fafafa;
 }
 
 .goods-table :deep(.el-table__header th) {
-  border-bottom: 2px solid #f3f4f6;
+  border-bottom: 1px solid #e0e0e0;
   font-weight: 600;
 }
 
 .goods-image-wrapper {
-  width: 100px;
-  height: 100px;
+  width: 60px;
+  height: 60px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
   overflow: hidden;
-  background: #f9fafb;
+  background: #fafafa;
 }
 
 .goods-image {
@@ -1259,128 +1476,131 @@ onMounted(loadProfile);
 }
 
 .no-image {
-  color: #9ca3af;
+  color: #999;
   font-size: 12px;
 }
 
 .price {
-  color: #ef4444;
+  color: #e53935;
   font-weight: 600;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .table-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .empty-state {
   text-align: center;
-  padding: 48px 20px;
-  color: #9ca3af;
+  padding: 32px 16px;
+  color: #999;
 }
 
 .empty-icon {
-  width: 64px;
-  height: 64px;
-  margin: 0 auto 16px;
-  color: #d1d5db;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px;
+  color: #ccc;
+}
+
+.empty-state p {
+  font-size: 13px;
 }
 
 .address-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
-  padding: 16px 24px 24px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 12px 16px 16px;
 }
 
 .address-card {
   background: #fafafa;
-  border-radius: 12px;
-  padding: 20px;
-  border: 2px solid transparent;
-  transition: all 0.3s ease;
+  border: 1px solid #e0e0e0;
+  padding: 12px;
+  transition: all 0.15s ease;
 }
 
 .address-card:hover {
-  background: #f3f4f6;
-  border-color: #e5e7eb;
+  border-color: #bbb;
 }
 
 .address-card.default-address {
-  border-color: #409eff;
-  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  border-color: #1e88e5;
+  background: #e3f2fd;
 }
 
 .address-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .address-user {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .address-user .name {
   font-weight: 600;
-  color: #1f2937;
+  color: #333;
+  font-size: 14px;
 }
 
 .address-user .phone {
-  color: #6b7280;
-  font-size: 14px;
+  color: #666;
+  font-size: 12px;
 }
 
 .address-detail {
-  color: #4b5563;
-  font-size: 14px;
-  line-height: 1.6;
-  margin-bottom: 16px;
+  color: #666;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 10px;
 }
 
 .address-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   justify-content: flex-end;
 }
 
 .image-preview {
-  margin-top: 12px;
+  margin-top: 8px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .preview-image {
-  width: 120px;
-  height: 120px;
+  width: 80px;
+  height: 80px;
   object-fit: cover;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #e0e0e0;
 }
 
 .hint-text {
-  margin-left: 12px;
-  color: #9ca3af;
-  font-size: 13px;
+  margin-left: 8px;
+  color: #999;
+  font-size: 12px;
 }
 
 .checkbox-label {
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: #374151;
+  gap: 6px;
+  color: #333;
+  font-size: 13px;
 }
 
 .profile-avatar-edit {
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 12px;
 }
 
 .avatar-preview-wrapper {
@@ -1388,36 +1608,38 @@ onMounted(loadProfile);
 }
 
 .avatar-preview {
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
+  width: 60px;
+  height: 60px;
+  border-radius: 0;
   object-fit: cover;
-  border: 2px solid #e5e7eb;
+  border: 1px solid #e0e0e0;
 }
 
 .avatar-preview-placeholder {
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #409eff 0%, #66b1ff 100%);
+  width: 60px;
+  height: 60px;
+  background: #1e88e5;
   color: white;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 32px;
+  font-size: 24px;
   font-weight: bold;
 }
 
+.custom-dialog :deep(.el-dialog) {
+  border-radius: 0;
+}
+
 .custom-dialog :deep(.el-dialog__header) {
-  background: #409eff;
-  padding: 20px 24px;
-  border-radius: 12px 12px 0 0;
+  background: #333;
+  padding: 12px 16px;
 }
 
 .custom-dialog :deep(.el-dialog__title) {
   color: white;
-  font-weight: 600;
-  font-size: 16px;
+  font-weight: 500;
+  font-size: 14px;
 }
 
 .custom-dialog :deep(.el-dialog__close) {
@@ -1425,48 +1647,232 @@ onMounted(loadProfile);
 }
 
 .custom-dialog :deep(.el-dialog__body) {
-  padding: 24px;
+  padding: 16px;
+}
+
+.custom-dialog :deep(.el-dialog__footer) {
+  padding: 12px 16px;
+  border-top: 1px solid #e0e0e0;
 }
 
 @media (max-width: 768px) {
   .profile-container {
-    padding: 20px 15px;
+    padding: 12px;
   }
-  
+
   .user-info-section {
     flex-direction: column;
     align-items: center;
     text-align: center;
-    padding: 30px 20px;
-    gap: 30px;
+    padding: 16px;
+    gap: 16px;
   }
-  
+
   .upload-btn {
     position: static;
-    transform: none;
-    margin-top: 15px;
+    margin-top: 12px;
   }
-  
+
   .user-meta {
     justify-content: center;
   }
-  
+
   .user-actions {
     justify-content: center;
   }
-  
+
   .address-grid {
     grid-template-columns: 1fr;
   }
-  
+
   .card-header {
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
     align-items: flex-start;
   }
-  
-  .goods-table :deep(.el-table) {
-    font-size: 13px;
-  }
+}
+
+.member-benefits-card {
+  background: #fffbeb;
+}
+
+.member-benefits-card .current-level {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.benefits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 12px;
+  padding: 12px 16px 16px;
+}
+
+.benefit-card {
+  background: white;
+  padding: 12px;
+  text-align: center;
+  border: 1px solid #e0e0e0;
+  position: relative;
+  transition: all 0.15s ease;
+}
+
+.benefit-card:hover {
+  border-color: #bbb;
+}
+
+.benefit-card.current-level {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.benefit-card.locked {
+  opacity: 0.6;
+  background: #fafafa;
+}
+
+.benefit-icon {
+  font-size: 24px;
+  margin-bottom: 4px;
+}
+
+.benefit-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.benefit-discount {
+  margin-bottom: 4px;
+}
+
+.discount-label {
+  font-size: 11px;
+  color: #999;
+  display: block;
+}
+
+.discount-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #e53935;
+}
+
+.benefit-requirements {
+  font-size: 11px;
+  color: #999;
+}
+
+.current-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #f59e0b;
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  font-weight: 600;
+}
+
+.locked-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 12px;
+}
+
+.coupon-card-container {
+  margin-top: 0;
+}
+
+.coupon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  padding: 12px 16px 16px;
+}
+
+.coupon-card-item {
+  display: flex;
+  background: white;
+  border: 1px solid #e0e0e0;
+  overflow: hidden;
+  position: relative;
+  transition: all 0.15s ease;
+}
+
+.coupon-card-item:hover {
+  border-color: #bbb;
+}
+
+.coupon-left-section {
+  width: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #e53935;
+  padding: 12px 0;
+}
+
+.coupon-amount-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+}
+
+.coupon-condition {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.9);
+  margin-top: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 2px 6px;
+}
+
+.coupon-right-section {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.coupon-type-badge {
+  display: inline-block;
+  font-size: 11px;
+  color: #e53935;
+  background: #ffebee;
+  padding: 2px 6px;
+  width: fit-content;
+}
+
+.coupon-applicable-info {
+  font-size: 13px;
+  color: #333;
+  font-weight: 500;
+}
+
+.coupon-expire-info {
+  font-size: 11px;
+  color: #999;
+}
+
+.coupon-status {
+  font-size: 12px;
+  color: #43a047;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+.coupon-status.used {
+  color: #999;
+}
+
+.empty-tip {
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
 }
 </style>

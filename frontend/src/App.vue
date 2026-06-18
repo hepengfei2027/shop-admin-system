@@ -8,6 +8,44 @@ const user = ref<any>(null);
 const unreadCount = ref(0);
 const mobileMenuVisible = ref(false);
 
+const memberLevels = [
+  { level: 1, name: '普通会员', minExp: 0, maxExp: 100, discount: 1 },
+  { level: 2, name: '银卡会员', minExp: 100, maxExp: 500, discount: 0.98 },
+  { level: 3, name: '金卡会员', minExp: 500, maxExp: 2000, discount: 0.95 },
+  { level: 4, name: '铂金会员', minExp: 2000, maxExp: 5000, discount: 0.92 },
+  { level: 5, name: '钻石会员', minExp: 5000, maxExp: 10000, discount: 0.88 },
+  { level: 6, name: '至尊会员', minExp: 10000, maxExp: Infinity, discount: 0.85 }
+];
+
+const getMemberDiscount = (experience: number) => {
+  if (user.value && user.value.discount !== undefined) {
+    return user.value.discount;
+  }
+  for (let i = memberLevels.length - 1; i >= 0; i--) {
+    if (experience >= memberLevels[i].minExp) {
+      return memberLevels[i].discount;
+    }
+  }
+  return 1;
+};
+
+const getMemberLevel = (experience: number) => {
+  if (user.value && user.value.memberLevel !== undefined) {
+    const level = memberLevels.find(l => l.level === user.value.memberLevel);
+    return level || memberLevels[0];
+  }
+  for (let i = memberLevels.length - 1; i >= 0; i--) {
+    if (experience >= memberLevels[i].minExp) {
+      return memberLevels[i];
+    }
+  }
+  return memberLevels[0];
+};
+
+provide('memberLevels', memberLevels);
+provide('getMemberDiscount', getMemberDiscount);
+provide('getMemberLevel', getMemberLevel);
+
 const loadUnreadCount = async () => {
   if (user.value) {
     try {
@@ -96,6 +134,8 @@ const logout = () => {
           <el-button type="primary" text @click="$router.push('/')">首页</el-button>
           <el-button type="primary" text @click="$router.push('/Profile')">个人中心</el-button>
           <el-button v-if="user && user.role === 2" type="primary" text @click="$router.push('/publish')">发布商品</el-button>
+          <el-button v-if="user && user.role === 2" type="primary" text @click="$router.push('/shop-management')">店铺管理</el-button>
+          <el-button v-if="user && user.role === 2" type="primary" text @click="$router.push('/seller-analytics')">数据分析</el-button>
           <el-button v-if="!user || user.role !== 1" type="primary" text @click="$router.push('/orders')">我的订单</el-button>
           <el-button type="primary" text @click="$router.push('/messages')">
             消息
@@ -128,6 +168,8 @@ const logout = () => {
           <el-button type="primary" text @click="$router.push('/')">首页</el-button>
           <el-button type="primary" text @click="$router.push('/Profile')">个人中心</el-button>
           <el-button v-if="user && user.role === 2" type="primary" text @click="$router.push('/publish')">发布商品</el-button>
+          <el-button v-if="user && user.role === 2" type="primary" text @click="$router.push('/shop-management')">店铺管理</el-button>
+          <el-button v-if="user && user.role === 2" type="primary" text @click="$router.push('/seller-analytics')">数据分析</el-button>
           <el-button v-if="!user || user.role !== 1" type="primary" text @click="$router.push('/orders')">我的订单</el-button>
           <el-button type="primary" text @click="$router.push('/messages')">
             消息

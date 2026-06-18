@@ -18,8 +18,8 @@ public interface UserMapper {
     @Select("SELECT * FROM user")
     List<User> findAll();
 
-    @Insert("INSERT INTO user(username, password, nickname, phone, role, status, banned_until, create_time) " +
-            "VALUES(#{username}, #{password}, #{nickname}, #{phone}, #{role}, #{status}, #{bannedUntil}, NOW())")
+    @Insert("INSERT INTO user(username, password, nickname, phone, role, status, banned_until, create_time, member_level, experience, discount) " +
+            "VALUES(#{username}, #{password}, #{nickname}, #{phone}, #{role}, #{status}, #{bannedUntil}, NOW(), 1, 0, 1.0)")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(User user);
 
@@ -40,5 +40,9 @@ public interface UserMapper {
     
     @Select("SELECT COUNT(*) FROM user")
     long count();
+    
+    @Update("UPDATE user SET member_level = #{memberLevel}, experience = #{experience}, discount = #{discount} WHERE id = #{id}")
+    int updateMemberInfo(@Param("id") Long id, @Param("memberLevel") Integer memberLevel, 
+                        @Param("experience") Integer experience, @Param("discount") Double discount);
 }
 

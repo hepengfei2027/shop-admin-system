@@ -8,9 +8,48 @@ const keyword = ref('');
 const cartItems = ref<any[]>([]);
 const user = inject('user', ref<any>(null));
 const placeholderIndex = ref(0);
-const orders = ref<any[]>([]);
 const showPlaceholder = ref(true);
 const currentPlaceholder = ref('搜索宝贝');
+
+const categories = [
+  { label: '全部', value: '' },
+  { label: '数码电子', value: '数码电子' },
+  { label: '服装服饰', value: '服装服饰' },
+  { label: '美妆护肤', value: '美妆护肤' },
+  { label: '家居日用', value: '家居日用' },
+  { label: '食品饮料', value: '食品饮料' },
+  { label: '图书文具', value: '图书文具' },
+  { label: '运动户外', value: '运动户外' },
+  { label: '其他', value: '其他' }
+];
+
+const activeCategory = ref('');
+
+const showFilterPanel = ref(false);
+const brands = ref<any[]>([]);
+const selectedBrand = ref('');
+const priceRanges = [
+  { label: '全部', min: 0, max: 0 },
+  { label: '0-50', min: 0, max: 50 },
+  { label: '50-100', min: 50, max: 100 },
+  { label: '100-200', min: 100, max: 200 },
+  { label: '200-500', min: 200, max: 500 },
+  { label: '500+', min: 500, max: 0 }
+];
+const selectedPriceRange = ref('全部');
+const customMinPrice = ref('');
+const customMaxPrice = ref('');
+
+const loadBrands = async () => {
+  try {
+    const res = await api.listBrands();
+    if (res.data.code === 0) {
+      brands.value = res.data.data || [];
+    }
+  } catch (err) {
+    console.error("加载品牌列表失败", err);
+  }
+};
 
 const getCartKey = () => {
   if (user.value) {
@@ -23,9 +62,15 @@ const cartCount = computed(() => {
   return cartItems.value.reduce((total, item) => total + item.quantity, 0);
 });
 
-const updateCart = () => {
-  localStorage.setItem(getCartKey(), JSON.stringify(cartItems.value));
+const getMemberPrice = (price: number) => {
+  const discount = (user.value?.discount !== undefined && user.value?.discount !== null) ? user.value.discount : 1;
+  return (price * discount).toFixed(2);
 };
+
+const showMemberPrice = computed(() => {
+  const discount = user.value?.discount;
+  return discount !== undefined && discount !== null && discount < 1;
+});
 
 const loadCart = () => {
   const cartStr = localStorage.getItem(getCartKey());
@@ -40,9 +85,12 @@ watch(user, () => {
   loadCart();
 }, { deep: true });
 
+const orders = ref<any[]>([]);
+
 const loadOrders = async () => {
+  if (!user.value?.id) return;
   try {
-    const res = await api.getAllOrders();
+    const res = await api.listBuyerOrders(user.value.id);
     if (res.data.code === 0) {
       orders.value = res.data.data || [];
     } else if (Array.isArray(res.data)) {
@@ -50,8 +98,6 @@ const loadOrders = async () => {
     } else {
       orders.value = [];
     }
-    console.log('Orders loaded:', orders.value);
-    console.log('Order statuses:', orders.value.map(o => ({ goodsId: o.goodsId || o.goodId, status: o.status })));
   } catch (err) {
     console.error("加载订单失败", err);
     orders.value = [];
@@ -59,12 +105,10 @@ const loadOrders = async () => {
 };
 
 const getSalesCount = (goodsId: number) => {
-  const orderId = orders.value.map(o => o.goodsId || o.goodId);
-  console.log('Goods ID:', goodsId, 'Order goodsIds:', orderId);
   return orders.value.filter(order => {
     const orderGoodsId = order.goodsId !== undefined ? order.goodsId : order.goodId;
-    const statusMatch = order.status === 'COMPLETED' || order.status === 'completed' || order.status === 2;
-    return orderGoodsId === goodsId && statusMatch;
+    // status=3 表示已完成
+    return orderGoodsId === goodsId && order.status === 3;
   }).length;
 };
 
@@ -87,20 +131,56 @@ const loadList = async () => {
 };
 
 const onSearch = async () => {
-  if (!keyword.value.trim()) {
+  if (!keyword.value.trim() && !selectedBrand.value && selectedPriceRange.value === '全部' && !customMinPrice.value && !customMaxPrice.value) {
     return loadList();
   }
   try {
-    const res = await api.searchGoods(keyword.value);
+    const priceRange = priceRanges.find(r => r.label === selectedPriceRange.value);
+    const params: any = {
+      keyword: keyword.value || undefined,
+      brand: selectedBrand.value || undefined,
+      minPrice: customMinPrice.value ? parseFloat(customMinPrice.value) : (priceRange?.min || undefined),
+      maxPrice: customMaxPrice.value ? parseFloat(customMaxPrice.value) : (priceRange?.max || undefined)
+    };
+    if (params.maxPrice === 0) {
+      delete params.maxPrice;
+    }
+    const res = await api.searchGoodsWithFilter(params);
     goodsList.value = res.data.data || [];
   } catch (err) {
     ElMessage.error("搜索失败");
   }
 };
 
+const onCategoryClick = async (category: string) => {
+  activeCategory.value = category;
+  if (!category && !selectedBrand.value && selectedPriceRange.value === '全部' && !customMinPrice.value && !customMaxPrice.value) {
+    keyword.value = '';
+    return loadList();
+  }
+  keyword.value = category;
+  await onSearch();
+};
+
 const clearSearch = async () => {
   keyword.value = '';
+  selectedBrand.value = '';
+  selectedPriceRange.value = '全部';
+  customMinPrice.value = '';
+  customMaxPrice.value = '';
+  showFilterPanel.value = false;
   await loadList();
+};
+
+const toggleFilterPanel = () => {
+  if (!showFilterPanel.value) {
+    loadBrands();
+  }
+  showFilterPanel.value = !showFilterPanel.value;
+};
+
+const applyFilter = async () => {
+  await onSearch();
 };
 
 const getPlaceholderText = () => {
@@ -164,10 +244,7 @@ onMounted(() => {
               </svg>
             </button>
             <button class="search-btn" @click="onSearch">
-              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"/>
-                <path d="m21 21-4.35-4.35"/>
-              </svg>
+              搜索
             </button>
           </div>
           <button class="cart-btn" @click="$router.push('/cart')">
@@ -178,6 +255,17 @@ onMounted(() => {
             </svg>
             <span v-if="cartCount > 0" class="cart-badge">{{ cartCount }}</span>
           </button>
+        </div>
+      </div>
+
+      <div class="category-bar">
+        <div 
+          v-for="cat in categories" 
+          :key="cat.value" 
+          :class="['category-item', { active: activeCategory === cat.value }]"
+          @click="onCategoryClick(cat.value)"
+        >
+          {{ cat.label }}
         </div>
       </div>
 
@@ -201,8 +289,52 @@ onMounted(() => {
 
       <div class="container">
         <div class="section-header">
-          <h2>热门商品</h2>
-          <span class="section-subtitle">为你精选</span>
+          <div class="section-header-content">
+            <h2>热门商品</h2>
+            <span class="section-subtitle">为你精选</span>
+          </div>
+          <button v-if="keyword || activeCategory || selectedBrand || selectedPriceRange !== '全部' || customMinPrice || customMaxPrice" 
+                  class="filter-toggle-btn" 
+                  @click="toggleFilterPanel">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="filter-icon">
+              <polygon points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            筛选
+          </button>
+        </div>
+
+        <div v-if="showFilterPanel" class="filter-panel">
+          <div class="filter-section">
+            <h4>品牌</h4>
+            <div class="filter-options">
+              <label class="filter-option">
+                <input type="radio" name="brand" value="" v-model="selectedBrand" />
+                <span>全部</span>
+              </label>
+              <label class="filter-option" v-for="brand in brands" :key="brand.brandName">
+                <input type="radio" name="brand" :value="brand.brandName" v-model="selectedBrand" />
+                <span>{{ brand.brandName }}</span>
+              </label>
+            </div>
+          </div>
+          <div class="filter-section">
+            <h4>价格区间</h4>
+            <div class="filter-options">
+              <label class="filter-option" v-for="range in priceRanges" :key="range.label">
+                <input type="radio" name="priceRange" :value="range.label" v-model="selectedPriceRange" />
+                <span>{{ range.label }}</span>
+              </label>
+            </div>
+            <div class="custom-price">
+              <input type="number" v-model="customMinPrice" placeholder="最低价" />
+              <span>-</span>
+              <input type="number" v-model="customMaxPrice" placeholder="最高价" />
+            </div>
+          </div>
+          <div class="filter-actions">
+            <button class="filter-btn filter-reset" @click="clearSearch">重置</button>
+            <button class="filter-btn filter-apply" @click="applyFilter">应用</button>
+          </div>
         </div>
 
         <div v-if="goodsList.length === 0" class="empty-state">
@@ -234,10 +366,35 @@ onMounted(() => {
               <span v-if="!item.freight || item.freight === 0" class="free-shipping-tag">包邮</span>
             </div>
             <div class="goods-info">
-              <h3 class="goods-title">{{ item.title }} {{ item.description }}</h3>
+              <h3 class="goods-title">
+                <span v-if="item.brandName" class="brand-tag-inline" :style="{ backgroundColor: item.brandColor || '#ff1744' }">
+                  {{ item.brandName }}
+                </span>
+                {{ item.title }} {{ item.description }}
+              </h3>
+              <div class="tags-wrapper">
+                <span v-if="item.promotionLabel" class="activity-tag" :class="'activity-' + item.promotionType">
+                  {{ item.promotionLabel }}
+                </span>
+<!--                <span v-if="item.hasDiscount && item.promotionType !== 2" class="activity-tag activity-2">-->
+<!--                  {{ ((item.discountRate || 0.8) * 10).toFixed(1) }}折-->
+<!--                </span>-->
+                <span v-if="item.hasFullReduce" class="activity-tag activity-1">
+                  满{{ item.fullReduceThreshold }}减{{ item.fullReduceAmount }}
+                </span>
+              </div>
               <div class="goods-footer">
-                <span class="goods-price">￥{{ item.price.toFixed(2) }}</span>
-                <span class="goods-stock">销量 {{ getSalesCount(item.id) }} 件</span>
+                <div class="price-wrapper">
+                  <div class="price-column">
+                    <span v-if="item.promotionalPrice !== undefined && item.promotionalPrice < item.price" class="original-price">￥{{ item.price.toFixed(2) }}</span>
+                    <span v-if="showMemberPrice && item.promotionType !== 1 && (!item.promotionalPrice || item.promotionalPrice >= item.price)" class="original-price">￥{{ item.price.toFixed(2) }}</span>
+                    <span class="goods-price" :class="{ 'member-price': showMemberPrice && item.promotionType !== 1 && (!item.promotionalPrice || item.promotionalPrice >= item.price) }">
+                      <template v-if="item.promotionType === 1">￥{{ item.price.toFixed(2) }}</template>
+                      <template v-else>￥{{ (item.promotionalPrice !== undefined ? item.promotionalPrice : item.price * getMemberDiscount()).toFixed(2) }}</template>
+                    </span>
+                  </div>
+                </div>
+                <span class="goods-stock">已售 {{ getSalesCount(item.id) }} 件</span>
               </div>
             </div>
           </div>
@@ -257,14 +414,14 @@ onMounted(() => {
   min-width: 100%;
 
 }
-
+/* 主体上下边距 */
 .home-inner {
-  padding: 20px;
+  padding: 50px 20px;
 }
-
+/* 广告牌上下边距 */
 .top-section {
   max-width: 1600px;
-  margin: 0 auto;
+  margin: 50px auto 0px;
   background-color: #fff;
   border-radius: 20px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
@@ -275,7 +432,32 @@ onMounted(() => {
   background: transparent;
   padding: 0;
   max-width: 1600px;
-  margin: 0 auto 20px;
+  margin: 0px auto 20px;
+}
+
+.category-bar {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  max-width: 1600px;
+  margin: 0px auto 20px;
+  padding: 0 20px;
+  flex-wrap: wrap;
+}
+/*分类字体*/
+.category-item {
+  font-size: 16px;
+  color: #666;
+  cursor: pointer;
+}
+
+.category-item:hover {
+  color: #ff1744;
+}
+
+.category-item.active {
+  color: #ff1744;
+  font-weight: 600;
 }
 
 .search-bar {
@@ -288,12 +470,12 @@ onMounted(() => {
 
 .search-input-wrapper {
   flex: 1;
-  max-width: 600px;
+  max-width: 900px;
   display: flex;
   position: relative;
   background: #fff;
-  border-radius: 30px;
-  border: 2px solid #e53935;
+  border-radius: 12px;
+  border: 3px solid #ff1744;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   overflow: hidden;
   transition: box-shadow 0.3s ease;
@@ -305,11 +487,11 @@ onMounted(() => {
 
 .search-input-wrapper input {
   flex: 1;
-  height: 44px;
-  padding: 0 20px;
+  height: 56px;
+  padding: 0 24px 0 12px;
   border: none;
   outline: none;
-  font-size: 15px;
+  font-size: 16px;
   color: #333;
   transition: all 0.3s ease;
 }
@@ -355,25 +537,28 @@ onMounted(() => {
 }
 
 .search-btn {
-  width: 50px;
-  height: 44px;
-  background: #fff;
+  width: 100px;
+  height: 56px;
+  background: #ff1744;
   border: none;
+  border-radius: 0 8px 8px 0;
   cursor: pointer;
-  color: #e53935;
+  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.2s;
+  transition: background 0.2s;
+  font-size: 20px;
+  font-weight: 600;
 }
 
 .search-btn:hover {
-  color: #c62828;
+  background: #c62828;
 }
 
 .clear-btn {
-  width: 30px;
-  height: 44px;
+  width: 40px;
+  height: 56px;
   background: transparent;
   border: none;
   cursor: pointer;
@@ -402,7 +587,7 @@ onMounted(() => {
   position: relative;
   width: 44px;
   height: 44px;
-  background: #e53935;
+  background: #ff1744;
   border: none;
   border-radius: 50%;
   cursor: pointer;
@@ -437,9 +622,10 @@ onMounted(() => {
   justify-content: center;
   padding: 0 4px;
 }
-
+/*广告牌图片*/
 .banner {
-  background: linear-gradient(120deg, #ffcdd2 0%, #ef9a9a 50%, #e57373 100%);
+  background: linear-gradient(135deg, rgba(255, 103, 0, 0.1) 0%, rgba(255, 80, 0, 0.1) 100%),
+              url('https://images.unsplash.com/photo-1552664730-d307ca884978?w=1920&q=80') center/cover no-repeat;
   padding: 50px 40px;
   position: relative;
   overflow: hidden;
@@ -448,13 +634,13 @@ onMounted(() => {
 .banner-decoration {
   position: absolute;
   border-radius: 50%;
-  opacity: 0.1;
+  opacity: 0.15;
 }
 
 .banner-decoration-1 {
   width: 200px;
   height: 200px;
-  background: #e53935;
+  background: #fff;
   top: -50px;
   right: 10%;
   animation: float 6s ease-in-out infinite;
@@ -463,7 +649,7 @@ onMounted(() => {
 .banner-decoration-2 {
   width: 150px;
   height: 150px;
-  background: #e53935;
+  background: #fff;
   bottom: -30px;
   left: 5%;
   animation: float 8s ease-in-out infinite reverse;
@@ -472,7 +658,7 @@ onMounted(() => {
 .banner-decoration-3 {
   width: 100px;
   height: 100px;
-  background: #e53935;
+  background: #fff;
   top: 20%;
   right: 25%;
   animation: float 5s ease-in-out infinite;
@@ -493,7 +679,7 @@ onMounted(() => {
 
 .banner-badge {
   display: inline-block;
-  background: #e53935;
+  background: rgba(255, 255, 255, 0.25);
   color: #fff;
   font-size: 13px;
   font-weight: 600;
@@ -501,6 +687,7 @@ onMounted(() => {
   border-radius: 20px;
   margin-bottom: 16px;
   letter-spacing: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
 .banner-title {
@@ -509,6 +696,7 @@ onMounted(() => {
   font-weight: 800;
   color: #fff;
   letter-spacing: -1px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
 }
 
 .banner-subtitle {
@@ -532,9 +720,6 @@ onMounted(() => {
   font-weight: 500;
   padding: 8px 20px;
   border-radius: 25px;
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  backdrop-filter: blur(10px);
-  transition: all 0.3s ease;
 }
 
 .banner-tag:hover {
@@ -553,9 +738,16 @@ onMounted(() => {
 
 .section-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.section-header-content {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 
 .section-header h2 {
@@ -652,11 +844,98 @@ onMounted(() => {
   position: absolute;
   top: 10px;
   left: 10px;
-  background: #e53935;
+  background: #ff1744;
   color: #fff;
   font-size: 11px;
   padding: 3px 10px;
   border-radius: 12px;
+}
+
+.promotion-tag {
+  position: absolute;
+  top: 10px;
+  font-size: 11px;
+  padding: 1px 10px;
+  border-radius: 12px;
+  font-weight: 500;
+  height: 18px;
+  line-height: 18px;
+}
+
+.fullreduce-tag {
+  left: 55px;
+  background: linear-gradient(135deg, #ff9800, #ff5722);
+  color: #fff;
+}
+
+.discount-tag {
+  left: 55px;
+  background: linear-gradient(135deg, #2196f3, #1976d2);
+  color: #fff;
+}
+
+.groupbuy-tag {
+  left: 55px;
+  background: linear-gradient(135deg, #e91e63, #c2185b);
+  color: #fff;
+}
+
+.brand-tag {
+  display: inline-block;
+  color: #fff;
+  font-size: 12px;
+  padding: 0px 8px;
+  border-radius: 3px;
+  height: 20px;
+  line-height: 20px;
+  flex-shrink: 0;
+}
+
+.brand-tag-inline {
+  display: inline-block;
+  color: #fff;
+  font-size: 12px;
+  padding: 0px 6px;
+  border-radius: 3px;
+  height: 18px;
+  line-height: 18px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.tags-wrapper {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.activity-tag {
+  display: inline-block;
+  font-size: 12px;
+  padding: 0px 8px;
+  border-radius: 3px;
+  font-weight: 500;
+  height: 18px;
+  line-height: 18px;
+}
+
+.activity-1 {
+  background-color: #fff3e0;
+  color: #e65100;
+  border: 1px solid #ffcc80;
+}
+
+.activity-2 {
+  background-color: #e3f2fd;
+  color: #1565c0;
+  border: 1px solid #90caf9;
+}
+
+.activity-3 {
+  background-color: #fce4ec;
+  color: #e91e63;
+  border: 1px solid #f8bbd9;
 }
 
 .goods-info {
@@ -667,10 +946,13 @@ onMounted(() => {
   font-size: 18px;
   font-weight: 500;
   color: #000;
-  margin: 0 0 12px 0;
+  margin: 0 0 8px 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .goods-footer {
@@ -679,14 +961,160 @@ onMounted(() => {
   align-items: center;
 }
 
+.price-wrapper {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.price-column {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fullreduce-hint {
+  font-size: 12px;
+  color: #ff9800;
+  background: #fff3e0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  height: 18px;
+  line-height: 18px;
+  display: inline-block;
+}
+
 .goods-price {
-  font-size: 22px;
+  font-size: 25px;
   font-weight: 700;
-  color: #e53935;
+  color: #ff1744;
+}
+
+.member-price {
+  color: #ff1744;
+}
+
+.original-price {
+  font-size: 12px;
+  color: #999;
+  text-decoration: line-through;
 }
 
 .goods-stock {
   font-size: 12px;
   color: #999;
+}
+
+.filter-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 14px;
+  color: #666;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.filter-toggle-btn:hover {
+  border-color: #ff1744;
+  color: #ff1744;
+}
+
+.filter-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.filter-panel {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.filter-section {
+  margin-bottom: 16px;
+}
+
+.filter-section h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.filter-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #666;
+}
+
+.filter-option input[type="radio"] {
+  width: 14px;
+  height: 14px;
+}
+
+.custom-price {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.custom-price input {
+  width: 80px;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #eee;
+}
+
+.filter-btn {
+  padding: 8px 20px;
+  font-size: 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.3s ease;
+}
+
+.filter-reset {
+  background: #f5f5f5;
+  color: #666;
+}
+
+.filter-reset:hover {
+  background: #eee;
+}
+
+.filter-apply {
+  background: #ff1744;
+  color: #fff;
+}
+
+.filter-apply:hover {
+  background: #ff0033;
 }
 </style>

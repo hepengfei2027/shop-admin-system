@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, inject, watch } from 'vue';
+import { onMounted, ref, inject, watch, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '../api';
 import { ElMessage, ElDialog, ElInput, ElButton, ElRate } from 'element-plus';
@@ -23,6 +23,8 @@ const replyForm = ref({
 const couponDialogVisible = ref(false);
 const couponAmount = ref(10);
 const availableCoupon = ref<any>(null);
+const availableCoupons = ref<any[]>([]);
+const claimedCouponIds = ref<number[]>([]);
 
 const editDialogVisible = ref(false);
 const editForm = ref<any>({
@@ -31,9 +33,229 @@ const editForm = ref<any>({
   description: '',
   imageUrl: '',
   price: 0,
-  freight: 0
+  freight: 0,
+  category: '',
+  brandName: '',
+  brandColor: '#ff1744'
 });
 const uploading = ref(false);
+
+// 团购活动相关
+const groupBuyActivities = ref<any[]>([]);
+const groupBuyParticipants = ref<Record<number, any[]>>({});
+const groupBuyDialogVisible = ref(false);
+const hasGroupBuyOrder = ref(false);
+
+// 限时折扣活动
+const discountActivity = ref<any>(null);
+
+// 满减活动
+const fullReduceActivity = ref<any>(null);
+
+const currentGroupBuy = computed(() => {
+  if (!goods.value) return null;
+  return groupBuyActivities.value.find(
+    (act: any) => act.goodsId === goods.value.id && act.status === '进行中'
+  ) || null;
+});
+
+const canJoinGroupBuy = computed(() => {
+  if (!currentGroupBuy.value || !user.value) return false;
+  if (hasGroupBuyOrder.value) return false;
+  const participants = groupBuyParticipants.value[currentGroupBuy.value.id] || [];
+  return !participants.some((p: any) => p.userId === user.value.id);
+});
+
+const isInGroupBuy = computed(() => {
+  if (!currentGroupBuy.value || !user.value) return false;
+  const participants = groupBuyParticipants.value[currentGroupBuy.value.id] || [];
+  return participants.some((p: any) => p.userId === user.value.id);
+});
+
+const groupBuyProgress = computed(() => {
+  if (!currentGroupBuy.value) return { current: 0, min: 0, percentage: 0 };
+  const participants = groupBuyParticipants.value[currentGroupBuy.value.id] || [];
+  const current = participants.length;
+  const min = currentGroupBuy.value.minGroupSize;
+  return {
+    current,
+    min,
+    percentage: Math.min((current / min) * 100, 100)
+  };
+});
+
+// 计算商品折扣价
+const discountedPrice = computed(() => {
+  if (!goods.value) return 0;
+  if (discountActivity.value) {
+    return (goods.value.price * (discountActivity.value.ruleDetail?.discountRate || 1)).toFixed(2);
+  }
+  return goods.value.price;
+});
+
+const loadPromotions = async () => {
+  if (!goods.value?.id) return;
+  try {
+    const res = await api.getGoodsPromotions(goods.value.id);
+    if (res.data.code === 0) {
+      const activities = res.data.data || [];
+      
+      // 限时折扣活动
+      const discountAct = activities.find((a: any) => a.type === 2 && a.status === 1);
+      if (discountAct) {
+        discountActivity.value = {
+          ...discountAct,
+          discountRate: discountAct.ruleDetail?.discountRate || 0.8
+        };
+      }
+      
+      // 满减活动
+      const fullReduceAct = activities.find((a: any) => a.type === 1 && a.status === 1);
+      if (fullReduceAct) {
+        fullReduceActivity.value = {
+          ...fullReduceAct,
+          thresholdAmount: fullReduceAct.ruleDetail?.thresholdAmount || 100,
+          reductionAmount: fullReduceAct.ruleDetail?.reductionAmount || 10
+        };
+      }
+      
+      // 团购活动
+      const groupActivities = activities.filter((a: any) => a.type === 3);
+      groupBuyActivities.value = groupActivities.map((a: any) => ({
+        ...a,
+        groupPrice: a.ruleDetail?.groupPrice || 0,
+        minGroupSize: a.ruleDetail?.minGroupSize || 2,
+        maxGroupSize: a.ruleDetail?.maxGroupSize || 10,
+        currentSize: a.ruleDetail?.currentSize || 0,
+        status: a.status === 1 ? '进行中' : '已结束'
+      }));
+      
+      // 加载团购参与人数
+      for (const activity of groupActivities) {
+        try {
+          const pRes = await api.getGroupParticipants(activity.id);
+          if (pRes.data.code === 0) {
+            groupBuyParticipants.value[activity.id] = pRes.data.data?.participants || [];
+          }
+        } catch (e) {
+          console.error('加载团购参与人数失败', e);
+        }
+      }
+
+      // 检查用户是否已有该商品的团购订单
+      if (user.value && groupActivities.length > 0) {
+        try {
+          const orderRes = await api.listBuyerOrdersWithDetails(user.value.id);
+          if (orderRes.data.code === 0) {
+            const orders = orderRes.data.data || [];
+            hasGroupBuyOrder.value = orders.some((order: any) =>
+              order.goodsId === goods.value.id &&
+              order.promotionType === 3 &&
+              order.status !== 4
+            );
+          }
+        } catch (e) {
+          console.error('检查团购订单失败', e);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('加载营销活动失败', e);
+  }
+};
+
+// 兼容旧函数名
+const loadGroupBuyActivities = loadPromotions;
+
+const joinGroupBuy = async () => {
+  if (!user.value) {
+    ElMessage.warning('请先登录');
+    router.push('/login');
+    return;
+  }
+  if (!currentGroupBuy.value) return;
+
+  try {
+    const res = await api.joinGroupBuy({
+      activityId: currentGroupBuy.value.id,
+      userId: user.value.id,
+      username: user.value.username || user.value.nickname || '用户'
+    });
+    
+    if (res.data.code === 0) {
+      const data = res.data.data;
+      // 重新加载团购活动
+      await loadGroupBuyActivities();
+      
+      if (data.isSuccess) {
+        ElMessage.success(`团购成功！当前 ${data.currentSize}/${data.minGroupSize} 人，已达到成团人数`);
+      } else {
+        ElMessage.success(`已加入团购！当前 ${data.currentSize}/${data.minGroupSize} 人`);
+      }
+    } else {
+      ElMessage.warning(res.data.msg || '加入团购失败');
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.msg || '加入团购失败');
+  }
+};
+
+const onGroupBuyBuy = () => {
+  if (!user.value) {
+    ElMessage.warning('请先登录');
+    router.push('/login');
+    return;
+  }
+  if (!currentGroupBuy.value) return;
+
+  const actId = currentGroupBuy.value.id;
+  const participants = groupBuyParticipants.value[actId] || [];
+
+  if (participants.length < currentGroupBuy.value.minGroupSize) {
+    ElMessage.warning(`团购人数不足，当前 ${participants.length}/${currentGroupBuy.value.minGroupSize} 人，未达到成团条件`);
+    return;
+  }
+
+  if (!participants.some((p: any) => p.userId === user.value.id)) {
+    ElMessage.warning('您需要先加入团购才能下单');
+    return;
+  }
+
+  // 跳转到确认订单页面，带上团购参数
+  router.push(`/confirm-order?goodsId=${goods.value.id}&groupBuyId=${currentGroupBuy.value.id}&groupPrice=${currentGroupBuy.value.groupPrice}`);
+};
+
+const categories = [
+  { label: '数码电子', value: '数码电子' },
+  { label: '服装服饰', value: '服装服饰' },
+  { label: '美妆护肤', value: '美妆护肤' },
+  { label: '家居日用', value: '家居日用' },
+  { label: '食品饮料', value: '食品饮料' },
+  { label: '图书文具', value: '图书文具' },
+  { label: '运动户外', value: '运动户外' },
+  { label: '其他', value: '其他' }
+];
+
+const brandColors = [
+  { label: '红色', value: '#ff1744' },
+  { label: '粉色', value: '#ff4081' },
+  { label: '紫色', value: '#e040fb' },
+  { label: '蓝色', value: '#448aff' },
+  { label: '青色', value: '#18ffff' },
+  { label: '绿色', value: '#00e676' },
+  { label: '黄色', value: '#ffea00' },
+  { label: '橙色', value: '#ff9100' }
+];
+
+const getMemberPrice = (price: number) => {
+  const discount = (user.value?.discount !== undefined && user.value?.discount !== null) ? user.value.discount : 1;
+  return (price * discount).toFixed(2);
+};
+
+const showMemberPrice = computed(() => {
+  const discount = user.value?.discount;
+  return discount !== undefined && discount !== null && discount < 1;
+});
 
 const getCartKey = () => {
   if (user.value) {
@@ -72,6 +294,11 @@ const loadDetail = async () => {
     } catch (err) {
       console.error('获取卖家信息失败', err);
     }
+  }
+
+  // 在商品数据加载后再获取营销活动信息
+  if (goods.value) {
+    await loadGroupBuyActivities();
   }
 
   await loadComments();
@@ -148,17 +375,8 @@ const onBuy = async () => {
     return;
   }
 
-  try {
-    const res = await api.createOrder(goods.value.id, user.value.id);
-    if (res.data.code === 0) {
-      const orderId = res.data.data.id;
-      router.push(`/payment/${orderId}`);
-    } else {
-      ElMessage.error(res.data.msg || '下单失败');
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.msg || '下单失败');
-  }
+  // 跳转到确认订单页面
+  router.push(`/confirm-order?goodsId=${goods.value.id}`);
 };
 
 const addToCart = () => {
@@ -266,6 +484,30 @@ const loadAvailableCoupon = async () => {
   }
 };
 
+const loadAllAvailableCoupons = async () => {
+  if (!goods.value || !user.value) return;
+  try {
+    const res = await api.getAllAvailableCoupons(goods.value.id, goods.value.sellerId, user.value.id);
+    if (res.data.code === 0 && res.data.data) {
+      availableCoupons.value = res.data.data.map((coupon: any) => ({
+        ...coupon,
+        typeName: coupon.type === 0 ? '通用优惠券' : '商品优惠券',
+        applicableTo: coupon.type === 0 ? '全店通用' : goods.value.title
+      }));
+    } else {
+      availableCoupons.value = [];
+    }
+    
+    const userCouponsRes = await api.getUserCoupons(user.value.id);
+    if (userCouponsRes.data.code === 0 && userCouponsRes.data.data) {
+      claimedCouponIds.value = userCouponsRes.data.data.map((c: any) => c.id);
+    }
+  } catch (err) {
+    console.error('加载所有优惠券失败', err);
+    availableCoupons.value = [];
+  }
+};
+
 const openCouponDialog = () => {
   couponAmount.value = 10;
   couponDialogVisible.value = true;
@@ -281,6 +523,7 @@ const issueCoupon = async () => {
     if (res.data.code === 0) {
       ElMessage.success('优惠券发放成功');
       couponDialogVisible.value = false;
+      await loadAllAvailableCoupons();
     } else {
       ElMessage.error(res.data.msg || '发放失败');
     }
@@ -289,19 +532,32 @@ const issueCoupon = async () => {
   }
 };
 
-const claimCoupon = async () => {
-  if (!availableCoupon.value) return;
+const claimCoupon = async (couponId?: number) => {
+  const id = couponId || availableCoupon.value?.id;
+  if (!id) return;
   try {
-    const res = await api.claimCoupon(availableCoupon.value.id, user.value.id);
+    const res = await api.claimCoupon(id, user.value.id);
     if (res.data.code === 0) {
       ElMessage.success('优惠券领取成功');
-      availableCoupon.value = null;
+      claimedCouponIds.value.push(id);
+      loadAllAvailableCoupons();
     } else {
       ElMessage.error(res.data.msg || '领取失败');
     }
   } catch (err) {
     ElMessage.error('领取失败');
   }
+};
+
+const couponListDialogVisible = ref(false);
+
+const openCouponListDialog = async () => {
+  await loadAllAvailableCoupons();
+  couponListDialogVisible.value = true;
+};
+
+const closeCouponListDialog = () => {
+  couponListDialogVisible.value = false;
 };
 
 const editGoods = async () => {
@@ -317,18 +573,35 @@ const editGoods = async () => {
 };
 
 const saveEdit = async () => {
+  if (!editForm.value.id) {
+    ElMessage.error('商品信息异常，请刷新后重试');
+    return;
+  }
   try {
     const payload = {
-      ...editForm.value,
+      id: editForm.value.id,
+      title: editForm.value.title,
+      description: editForm.value.description,
+      imageUrl: editForm.value.imageUrl,
+      price: editForm.value.price,
+      freight: editForm.value.freight,
+      stock: editForm.value.stock,
+      category: editForm.value.category,
+      brandName: editForm.value.brandName,
+      brandColor: editForm.value.brandColor,
       status: 0,
       sellerId: user.value.id
     };
-    await api.publishGoods(payload);
-    ElMessage.success('商品已更新，等待审核');
-    editDialogVisible.value = false;
-    loadDetail();
-  } catch (err) {
-    ElMessage.error('更新失败');
+    const res = await api.updateGoods(payload);
+    if (res.data.code === 0) {
+      ElMessage.success('商品已更新，等待审核');
+      editDialogVisible.value = false;
+      loadDetail();
+    } else {
+      ElMessage.error(res.data.msg || '更新失败');
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.msg || '更新失败');
   }
 };
 
@@ -369,6 +642,7 @@ const onFileChange = async (file: any) => {
 watch(goods, () => {
   if (goods.value && user.value) {
     loadAvailableCoupon();
+    loadAllAvailableCoupons();
   }
 });
 
@@ -408,7 +682,51 @@ onMounted(() => {
           <div class="goods-price-section">
             <div class="price-row">
               <span class="price-label">价格</span>
-              <span class="goods-price">￥{{ goods.price }}</span>
+              <div class="price-display">
+                <span v-if="showMemberPrice && !discountActivity" class="original-price">￥{{ goods.price }}</span>
+                <span v-if="discountActivity" class="original-price">￥{{ goods.price }}</span>
+                <span v-if="discountActivity" class="goods-price discount-price">￥{{ discountedPrice }}</span>
+                <span v-else class="goods-price">￥{{ getMemberPrice(goods.price) }}</span>
+                <span v-if="showMemberPrice" class="member-tag">会员价</span>
+                <span v-if="discountActivity" class="discount-tag">{{ (discountActivity.discountRate * 10).toFixed(1) }}折</span>
+              </div>
+            </div>
+
+            <!-- 限时折扣信息 -->
+            <div v-if="discountActivity" class="discount-entry">
+              <span class="discount-badge">🔥 限时折扣</span>
+              <span class="discount-text">限时 {{ (discountActivity.discountRate * 10).toFixed(1) }} 折优惠</span>
+            </div>
+
+            <!-- 满减信息 -->
+            <div v-if="fullReduceActivity" class="fullreduce-entry">
+              <span class="fullreduce-badge">🎯 满减优惠</span>
+              <span class="fullreduce-text">满 {{ fullReduceActivity.thresholdAmount }} 减 {{ fullReduceActivity.reductionAmount }}</span>
+            </div>
+
+            <!-- 团购信息 -->
+            <div v-if="currentGroupBuy" class="groupbuy-entry">
+              <div class="groupbuy-header">
+                <span class="groupbuy-badge">👥 团购</span>
+                <span class="groupbuy-price">¥{{ currentGroupBuy.groupPrice }}</span>
+                <span class="groupbuy-original">¥{{ goods.price }}</span>
+              </div>
+              <div class="groupbuy-progress-bar">
+                <div class="groupbuy-progress-fill" :style="{ width: groupBuyProgress.percentage + '%' }"></div>
+              </div>
+              <div class="groupbuy-status">
+                <span>{{ groupBuyProgress.current }}/{{ groupBuyProgress.min }}人已成团</span>
+                <span v-if="groupBuyProgress.current >= groupBuyProgress.min" class="groupbuy-success">已成团，可下单</span>
+                <span v-else class="groupbuy-pending">还差 {{ groupBuyProgress.min - groupBuyProgress.current }} 人</span>
+              </div>
+            </div>
+
+            <div v-if="user && user.id !== goods.sellerId" class="coupon-entry" @click="openCouponListDialog">
+              <svg class="coupon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                <line x1="7" y1="7" x2="7.01" y2="7"/>
+              </svg>
+              <span class="coupon-text">{{ availableCoupons.length > 0 ? `可领 ${availableCoupons.length} 张优惠券` : '暂无可用优惠券' }}</span>
             </div>
             <div class="info-row">
               <span class="info-label">运费</span>
@@ -458,7 +776,41 @@ onMounted(() => {
               </el-button>
             </template>
             <template v-else>
-              <el-button type="danger" class="action-btn buy-btn" @click="onBuy">
+              <!-- 团购按钮 -->
+              <template v-if="currentGroupBuy">
+                <el-button v-if="canJoinGroupBuy" type="warning" class="action-btn groupbuy-join-btn" @click="joinGroupBuy">
+                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                  </svg>
+                  参加团购 ¥{{ currentGroupBuy.groupPrice }}
+                </el-button>
+                <el-button v-else-if="groupBuyProgress.current >= groupBuyProgress.min" type="danger" class="action-btn groupbuy-buy-btn" @click="onGroupBuyBuy">
+                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="9" cy="21" r="1"/>
+                    <circle cx="20" cy="21" r="1"/>
+                    <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+                  </svg>
+                  团购下单 ¥{{ currentGroupBuy.groupPrice }}
+                </el-button>
+                <el-button v-else-if="hasGroupBuyOrder" type="info" class="action-btn groupbuy-wait-btn" disabled>
+                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                  已下单等待拼团
+                </el-button>
+                <el-button v-else type="info" class="action-btn groupbuy-wait-btn" disabled>
+                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                  等待成团 {{ groupBuyProgress.current }}/{{ groupBuyProgress.min }}
+                </el-button>
+              </template>
+              <el-button v-if="!currentGroupBuy" type="danger" class="action-btn buy-btn" @click="onBuy">
                 <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="9" cy="21" r="1"/>
                   <circle cx="20" cy="21" r="1"/>
@@ -479,12 +831,6 @@ onMounted(() => {
                   <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                 </svg>
                 私聊卖家
-              </el-button>
-              <el-button v-if="availableCoupon" type="warning" class="action-btn coupon-claim-btn" @click="claimCoupon">
-                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-                </svg>
-                领取优惠券 ￥{{ availableCoupon.amount }}
               </el-button>
             </template>
           </div>
@@ -616,6 +962,19 @@ onMounted(() => {
           <el-input-number v-model="editForm.freight" :min="0" :step="1" />
           <span class="form-tip">不填默认包邮</span>
         </el-form-item>
+        <el-form-item label="分类">
+          <el-select v-model="editForm.category" placeholder="请选择商品分类">
+            <el-option v-for="cat in categories" :key="cat.value" :label="cat.label" :value="cat.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="品牌名称">
+          <el-input v-model="editForm.brandName" placeholder="请输入品牌名称" />
+        </el-form-item>
+        <el-form-item label="品牌底色">
+          <el-select v-model="editForm.brandColor" placeholder="请选择品牌标签底色">
+            <el-option v-for="color in brandColors" :key="color.value" :label="color.label" :value="color.value" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -623,6 +982,44 @@ onMounted(() => {
           <el-button type="primary" @click="saveEdit">保存</el-button>
         </span>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="couponListDialogVisible" title="可用优惠券" width="500px" class="coupon-list-dialog" @close="closeCouponListDialog">
+      <div class="coupon-list-container">
+        <div v-if="availableCoupons.length === 0" class="empty-coupon-list">
+          <svg class="empty-coupon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+            <line x1="7" y1="7" x2="7.01" y2="7"/>
+          </svg>
+          <p>暂无可用优惠券</p>
+        </div>
+        <div v-for="coupon in availableCoupons" :key="coupon.id" class="coupon-card">
+          <div class="coupon-left">
+            <span class="coupon-amount">￥{{ coupon.amount }}</span>
+            <span v-if="coupon.minAmount && coupon.minAmount > 0" class="coupon-condition">满{{ coupon.minAmount }}可用</span>
+          </div>
+          <div class="coupon-right">
+            <div class="coupon-type">{{ coupon.typeName }}</div>
+            <div class="coupon-applicable">适用：{{ coupon.applicableTo }}</div>
+            <div class="coupon-info">
+              <span class="coupon-count">剩余 {{ coupon.totalCount - coupon.claimedCount }} 张</span>
+              <span class="coupon-expire">有效期至 {{ new Date(coupon.expireTime).toLocaleDateString() }}</span>
+            </div>
+            <div v-if="goods.price >= (coupon.minAmount || 0)" class="coupon-savings">
+              本商品使用可省：<span class="savings-amount">￥{{ coupon.amount }}</span>
+            </div>
+          </div>
+          <el-button 
+            v-if="!claimedCouponIds.includes(coupon.id)" 
+            type="primary" 
+            class="coupon-claim-btn"
+            @click="claimCoupon(coupon.id)"
+          >
+            立即领取
+          </el-button>
+          <span v-else class="coupon-claimed">已领取</span>
+        </div>
+      </div>
     </el-dialog>
   </div>
   <div v-else class="loading">
@@ -743,6 +1140,29 @@ onMounted(() => {
   font-size: 36px;
   font-weight: 700;
   color: #ff4757;
+}
+
+.price-display {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.original-price {
+  font-size: 16px;
+  color: #999;
+  text-decoration: line-through;
+}
+
+.member-tag {
+  display: inline-block;
+  font-size: 12px;
+  color: #ff1744;
+  background: linear-gradient(135deg, #ffe0e0 0%, #fff5f5 100%);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-top: 4px;
+  width: fit-content;
 }
 
 .info-row {
@@ -902,17 +1322,6 @@ onMounted(() => {
 }
 
 .coupon-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(255, 165, 2, 0.4);
-}
-
-.coupon-claim-btn {
-  background: linear-gradient(135deg, #ffa502 0%, #ff6348 100%);
-  color: white;
-  width: 100%;
-}
-
-.coupon-claim-btn:hover {
   transform: translateY(-2px);
   box-shadow: 0 8px 25px rgba(255, 165, 2, 0.4);
 }
@@ -1172,5 +1581,349 @@ onMounted(() => {
   .action-btn {
     width: 100%;
   }
+}
+
+.coupon-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #fff5f0 0%, #fff 100%);
+  border: 1px dashed #ff9f43;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  margin-top: 8px;
+}
+
+.coupon-entry:hover {
+  background: linear-gradient(135deg, #ffede0 0%, #fff5f0 100%);
+  border-color: #ff6b6b;
+  transform: translateX(4px);
+}
+
+.coupon-icon {
+  width: 18px;
+  height: 18px;
+  color: #ff9f43;
+}
+
+.coupon-text {
+  font-size: 14px;
+  color: #ff6b6b;
+  font-weight: 500;
+}
+
+.coupon-list-dialog :deep(.el-dialog) {
+  border-radius: 16px;
+}
+
+.coupon-list-container {
+  padding: 10px 0;
+}
+
+.empty-coupon-list {
+  text-align: center;
+  padding: 40px 20px;
+  color: #999;
+}
+
+.empty-coupon-icon {
+  width: 60px;
+  height: 60px;
+  margin-bottom: 15px;
+  color: #ddd;
+}
+
+.coupon-card {
+  display: flex;
+  align-items: center;
+  background: linear-gradient(135deg, #fff5f0 0%, #fff 100%);
+  border: 1px solid #ffe0c0;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 15px;
+  position: relative;
+  overflow: hidden;
+}
+
+.coupon-card::before {
+  content: '';
+  position: absolute;
+  left: 120px;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  background: #fff;
+}
+
+.coupon-card::after {
+  content: '';
+  position: absolute;
+  left: 110px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #ffe0c0;
+}
+
+.coupon-left {
+  width: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #ff6b6b 0%, #ff9f43 100%);
+  padding: 15px 0;
+  border-radius: 8px;
+  margin-right: 20px;
+}
+
+.coupon-amount {
+  font-size: 32px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+}
+
+.coupon-condition {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  margin-top: 4px;
+}
+
+.coupon-right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.coupon-type {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.coupon-applicable {
+  font-size: 13px;
+  color: #666;
+}
+
+.coupon-info {
+  display: flex;
+  gap: 15px;
+}
+
+.coupon-count, .coupon-expire {
+  font-size: 12px;
+  color: #999;
+}
+
+.coupon-savings {
+  font-size: 13px;
+  color: #ff6b6b;
+  margin-top: 4px;
+}
+
+.savings-amount {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.coupon-claim-btn {
+  padding: 8px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+  background: linear-gradient(135deg, #ff6b6b 0%, #ff9f43 100%);
+  border: none;
+  color: #fff;
+  height: auto;
+  line-height: 1;
+  min-width: auto;
+}
+
+.coupon-claim-btn:hover {
+  background: linear-gradient(135deg, #ff5252 0%, #ff8f33 100%);
+  color: #fff;
+}
+
+.coupon-claimed {
+  padding: 8px 20px;
+  font-size: 14px;
+  color: #999;
+  background: #f5f5f5;
+  border-radius: 20px;
+  display: inline-block;
+}
+
+/* 团购样式 */
+.groupbuy-entry {
+  background: linear-gradient(135deg, #fff8e1 0%, #fff 100%);
+  border: 1px solid #ffe0b2;
+  border-radius: 12px;
+  padding: 15px;
+  margin-bottom: 15px;
+}
+
+.groupbuy-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.groupbuy-badge {
+  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.groupbuy-price {
+  font-size: 24px;
+  font-weight: 700;
+  color: #ff6b00;
+}
+
+.groupbuy-original {
+  font-size: 14px;
+  color: #999;
+  text-decoration: line-through;
+}
+
+.groupbuy-progress-bar {
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.groupbuy-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff9800, #ff5722);
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+.groupbuy-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+
+.groupbuy-success {
+  color: #4caf50;
+  font-weight: 600;
+}
+
+.groupbuy-pending {
+  color: #ff9800;
+  font-weight: 600;
+}
+
+.groupbuy-join-btn {
+  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%) !important;
+  color: white !important;
+  border: none !important;
+}
+
+.groupbuy-join-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(255, 152, 0, 0.4);
+}
+
+.groupbuy-buy-btn {
+  background: linear-gradient(135deg, #ff4757 0%, #ff6b81 100%) !important;
+  color: white !important;
+  border: none !important;
+}
+
+.groupbuy-buy-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(255, 71, 87, 0.4);
+}
+
+.groupbuy-wait-btn {
+  background: #f5f5f5 !important;
+  color: #999 !important;
+  border: none !important;
+}
+
+/* 限时折扣样式 */
+.discount-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #fff0f0 0%, #fff 100%);
+  border: 1px solid #ffcdd2;
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+.discount-badge {
+  background: linear-gradient(135deg, #f44336 0%, #e53935 100%);
+  color: white;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.discount-text {
+  font-size: 14px;
+  color: #d32f2f;
+  font-weight: 500;
+}
+
+.discount-price {
+  color: #d32f2f !important;
+}
+
+.discount-tag {
+  background: linear-gradient(135deg, #f44336 0%, #e53935 100%);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-left: 8px;
+}
+
+/* 满减样式 */
+.fullreduce-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #e8f5e9 0%, #fff 100%);
+  border: 1px solid #c8e6c9;
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+.fullreduce-badge {
+  background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
+  color: white;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fullreduce-text {
+  font-size: 14px;
+  color: #2e7d32;
+  font-weight: 500;
 }
 </style>

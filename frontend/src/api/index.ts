@@ -18,6 +18,12 @@ export const api = {
   searchGoods(keyword: string) {
     return instance.get('/goods/search', { params: { keyword } });
   },
+  searchGoodsWithFilter(params: { keyword?: string; brand?: string; minPrice?: number; maxPrice?: number }) {
+    return instance.get('/goods/search/filter', { params });
+  },
+  listBrands() {
+    return instance.get('/goods/brands');
+  },
   publishGoods(data: any) {
     return instance.post('/goods/publish', data);
   },
@@ -60,8 +66,14 @@ export const api = {
   getGoodsDetail(id: number) {
     return instance.get(`/goods/detail/${id}`);
   },
+  updateGoods(goods: any) {
+    return instance.post('/goods/update', goods);
+  },
   listUsers() {
     return instance.get('/user/list');
+  },
+  getUserInfo(id: number) {
+    return instance.get(`/user/${id}`);
   },
   updateUserStatus(id: number, status: number, banHours?: number) {
     return instance.post(`/user/updateStatus/${id}`, null, { params: { status, banHours } });
@@ -111,8 +123,8 @@ export const api = {
   deleteAddress(id: number, userId: number) {
     return instance.delete(`/address/delete/${id}`, { params: { userId } });
   },
-  createOrder(goodsId: number, buyerId: number) {
-    return instance.post('/order/create', null, { params: { goodsId, buyerId } });
+  createOrder(goodsId: number, buyerId: number, addressId?: number, quantity?: number, couponId?: number, promotionType?: number, promotionId?: number, promotionDiscount?: number) {
+    return instance.post('/order/create', null, { params: { goodsId, buyerId, addressId, quantity, couponId, promotionType, promotionId, promotionDiscount } });
   },
   getOrderInfo(orderId: string) {
     return instance.get(`/order/info/${orderId}`);
@@ -146,6 +158,12 @@ export const api = {
   },
   listSellerOrders(sellerId: number) {
     return instance.get(`/order/seller/${sellerId}`);
+  },
+  listBuyerOrdersWithDetails(buyerId: number) {
+    return instance.get(`/order/buyer/${buyerId}/detail`);
+  },
+  listSellerOrdersWithDetails(sellerId: number) {
+    return instance.get(`/order/seller/${sellerId}/detail`);
   },
   createComment(data: any) {
     return instance.post('/comment/create', data);
@@ -220,8 +238,100 @@ export const api = {
   getUserCoupons(userId: number) {
     return instance.get('/coupon/user', { params: { userId } });
   },
-  useCoupon(couponId: number) {
-    return instance.post('/coupon/use', null, { params: { couponId } });
+  useCoupon(couponId: number, userId: number) {
+    return instance.post('/coupon/use', null, { params: { couponId, userId } });
+  },
+  createCoupon(data: any) {
+    return instance.post('/coupon/create', data);
+  },
+  getSellerCoupons(sellerId: number) {
+    return instance.get('/coupon/seller', { params: { sellerId } });
+  },
+  cancelCoupon(couponId: number) {
+    return instance.post(`/coupon/cancel/${couponId}`);
+  },
+  getAvailableUniversalCoupons(sellerId: number, userId: number) {
+    return instance.get('/coupon/available-universal', { params: { sellerId, userId } });
+  },
+  getAllAvailableCoupons(goodsId: number, sellerId: number, userId: number) {
+    return instance.get('/coupon/all-available', { params: { goodsId, sellerId, userId } });
+  },
+  getSellerAnalytics(sellerId: number) {
+    return instance.get(`/analytics/seller/${sellerId}`);
+  },
+  getPlatformTrend() {
+    return instance.get('/analytics/platform/trend');
+  },
+  getTopGoods() {
+    return instance.get('/analytics/platform/top-goods');
+  },
+  getUserAnalysis() {
+    return instance.get('/analytics/platform/user-analysis');
+  },
+  getOrderAnalysis() {
+    return instance.get('/analytics/platform/order-analysis');
+  },
+  
+  // ==================== 营销活动 API ====================
+  
+  // 获取商家的所有活动
+  getPromotionList(sellerId: number) {
+    return instance.get('/promotion/list', { params: { sellerId } });
+  },
+  
+  // 获取商家的某类型活动
+  getPromotionListByType(sellerId: number, type: number) {
+    return instance.get('/promotion/listByType', { params: { sellerId, type } });
+  },
+  
+  // 获取商品的活动
+  getGoodsPromotions(goodsId: number) {
+    return instance.get(`/promotion/goods/${goodsId}`);
+  },
+  
+  // 获取活动详情
+  getPromotionById(id: number) {
+    return instance.get(`/promotion/${id}`);
+  },
+  
+  // 取消活动
+  cancelPromotion(id: number) {
+    return instance.post(`/promotion/cancel/${id}`);
+  },
+  
+  // 删除活动
+  deletePromotion(id: number) {
+    return instance.delete(`/promotion/${id}`);
+  },
+  
+  // 创建满减活动
+  createFullReduce(data: any) {
+    return instance.post('/promotion/fullReduce', data);
+  },
+  
+  // 创建限时折扣活动
+  createDiscount(data: any) {
+    return instance.post('/promotion/discount', data);
+  },
+  
+  // 创建团购活动
+  createGroupBuy(data: any) {
+    return instance.post('/promotion/group', data);
+  },
+  
+  // 参加团购
+  joinGroupBuy(data: { activityId: number; userId: number; username: string }) {
+    return instance.post('/promotion/group/join', data);
+  },
+  
+  // 获取团购参与列表
+  getGroupParticipants(activityId: number) {
+    return instance.get(`/promotion/group/participants/${activityId}`);
+  },
+  
+  // 检查用户是否已参与团购
+  checkGroupJoined(activityId: number, userId: number) {
+    return instance.get('/promotion/group/checkJoined', { params: { activityId, userId } });
   }
 };
 

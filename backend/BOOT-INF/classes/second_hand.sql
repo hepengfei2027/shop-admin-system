@@ -96,6 +96,23 @@ CREATE TABLE `coupon`  (
 ) ENGINE = InnoDB AUTO_INCREMENT = 3 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '优惠券表' ROW_FORMAT = Dynamic;
 
 -- ----------------------------
+-- Table structure for user_coupon
+-- ----------------------------
+DROP TABLE IF EXISTS `user_coupon`;
+CREATE TABLE `user_coupon` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `user_id` bigint NOT NULL COMMENT '用户ID',
+  `coupon_id` bigint NOT NULL COMMENT '优惠券ID',
+  `claim_time` datetime NULL DEFAULT CURRENT_TIMESTAMP COMMENT '领取时间',
+  `status` int NULL DEFAULT 0 COMMENT '状态：0-已领取未使用，1-已使用',
+  `use_time` datetime NULL DEFAULT NULL COMMENT '使用时间',
+  PRIMARY KEY (`id`) USING BTREE,
+  INDEX `idx_user_id`(`user_id` ASC) USING BTREE,
+  INDEX `idx_coupon_id`(`coupon_id` ASC) USING BTREE,
+  UNIQUE INDEX `uk_user_coupon`(`user_id`, `coupon_id`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '用户优惠券领取记录表' ROW_FORMAT = Dynamic;
+
+-- ----------------------------
 -- Table structure for dispute
 -- ----------------------------
 DROP TABLE IF EXISTS `dispute`;
@@ -136,6 +153,9 @@ CREATE TABLE `goods`  (
   `create_time` datetime NULL DEFAULT CURRENT_TIMESTAMP,
   `freight` decimal(10, 2) NOT NULL DEFAULT 0.00 COMMENT '运费，不填默认0包邮',
   `stock` int NULL DEFAULT 999 COMMENT '库存',
+  `category` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_cs NULL DEFAULT NULL COMMENT '商品分类',
+  `brand_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_cs NULL DEFAULT NULL COMMENT '品牌名称',
+  `brand_color` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_cs NULL DEFAULT '#ff1744' COMMENT '品牌标签底色',
   PRIMARY KEY (`id`) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 37 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_as_cs ROW_FORMAT = Dynamic;
 

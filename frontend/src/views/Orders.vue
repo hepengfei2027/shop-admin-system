@@ -83,7 +83,7 @@ const formatDateTime = (dateStr: string) => {
 const loadBuyerOrders = async () => {
   if (!user.value) return;
   try {
-    const res = await api.listBuyerOrders(user.value.id);
+    const res = await api.listBuyerOrdersWithDetails(user.value.id);
     if (res.data.code === 0) {
       buyerOrders.value = res.data.data || [];
       const goodsIds = buyerOrders.value.map(o => o.goodsId);
@@ -102,7 +102,7 @@ const loadBuyerOrders = async () => {
 const loadSellerOrders = async () => {
   if (!user.value) return;
   try {
-    const res = await api.listSellerOrders(user.value.id);
+    const res = await api.listSellerOrdersWithDetails(user.value.id);
     if (res.data.code === 0) {
       sellerOrders.value = res.data.data || [];
       const goodsIds = sellerOrders.value.map(o => o.goodsId);
@@ -191,6 +191,10 @@ const handleConfirm = async (orderId: number) => {
 
 const goToPayment = (orderId: number) => {
   router.push(`/payment/${orderId}`);
+};
+
+const goToOrderDetail = (orderId: number) => {
+  router.push(`/order/${orderId}`);
 };
 
 const showCommentDialog = ref(false);
@@ -593,17 +597,6 @@ onMounted(() => {
 <template>
   <div class="orders-page">
     <h2>我的订单</h2>
-    
-    <div class="tabs">
-      <button
-        v-for="tab in tabs"
-        :key="tab.value"
-        :class="['tab', { active: activeTab === tab.value }]"
-        @click="handleTabChange(tab.value)"
-      >
-        {{ tab.label }}
-      </button>
-    </div>
 
     <div class="status-filters">
       <button
@@ -618,161 +611,150 @@ onMounted(() => {
     </div>
     
     <div class="orders-list">
-      <div 
-        v-for="order in currentOrders" 
-        :key="order.id" 
+      <div
+        v-for="order in currentOrders"
+        :key="order.id"
         class="order-card"
+        @click="goToOrderDetail(order.id)"
+        style="cursor: pointer;"
       >
+        <!-- 订单头部：订单号 + 状态 -->
         <div class="order-header">
-          <span class="order-id">订单号：{{ order.id }}</span>
+          <div class="header-left">
+            <span class="order-id">订单号：{{ order.id }}</span>
+            <span class="order-time">{{ formatDateTime(order.createTime) }}</span>
+          </div>
           <div class="status-tags">
-            <el-tag :type="statusMap[order.status]?.type || 'info'">
-              {{ statusMap[order.status]?.label || '未知状态' }}
+            <el-tag v-if="order.promotionType === 3 && order.groupStatus === 0" type="warning" size="small">等待拼团</el-tag>
+            <el-tag v-else :type="statusMap[order.status]?.type || 'info'" size="small">
+              {{ statusMap[order.status]?.label || '未知' }}
             </el-tag>
-            <el-tag 
-              v-if="order.afterSaleStatus && order.afterSaleStatus !== 0" 
-              :type="afterSaleStatusMap[order.afterSaleStatus]?.type || 'warning'"
-              class="after-sale-tag"
-            >
-              <span class="after-sale-icon">🔄</span>{{ afterSaleStatusMap[order.afterSaleStatus]?.label }}
-            </el-tag>
-            <el-tag 
-              v-if="disputeMap[order.id]" 
-              type="danger"
-              class="after-sale-tag"
-            >
-              <span class="after-sale-icon">⚖️</span>{{ getDisputeStatusLabel(disputeMap[order.id].status) }}
+            <el-tag v-if="order.promotionType === 1" type="success" size="small">满减</el-tag>
+            <el-tag v-if="order.promotionType === 2" type="danger" size="small">折扣</el-tag>
+            <el-tag v-if="order.promotionType === 3 && order.groupStatus === 1" type="success" size="small">团购</el-tag>
+            <el-tag v-if="order.afterSaleStatus && order.afterSaleStatus !== 0" :type="afterSaleStatusMap[order.afterSaleStatus]?.type || 'warning'" size="small">
+              {{ afterSaleStatusMap[order.afterSaleStatus]?.label }}
             </el-tag>
           </div>
         </div>
-        
-        <div class="order-items">
-          <div class="order-item">
-            <img 
-              v-if="goodsMap[order.goodsId]?.imageUrl" 
-              :src="goodsMap[order.goodsId]?.imageUrl" 
-              alt="商品图片" 
-              class="item-image" 
-            />
-            <div class="item-info">
-              <h4>{{ goodsMap[order.goodsId]?.title || '商品信息加载中...' }}</h4>
-              <p class="goods-desc">{{ goodsMap[order.goodsId]?.description || '' }}</p>
-              <p class="order-time">下单时间：{{ formatDateTime(order.createTime) }}</p>
+
+        <!-- 订单主体：商品信息 + 价格 + 操作 -->
+        <div class="order-body">
+          <img
+            v-if="goodsMap[order.goodsId]?.imageUrl"
+            :src="goodsMap[order.goodsId]?.imageUrl"
+            alt="商品图片"
+            class="item-image"
+          />
+          <div class="item-info">
+            <h4 class="goods-title">{{ goodsMap[order.goodsId]?.title || '商品信息加载中...' }}</h4>
+            <div class="info-row">
+              <span class="info-label">数量</span>
+              <span class="info-value">{{ order.quantity || 1 }}件</span>
+            </div>
+            <div class="info-row" v-if="order.addressDetail">
+              <span class="info-label">地址</span>
+              <span class="info-value address">{{ order.addressProvince || '' }}{{ order.addressCity || '' }}{{ order.addressDistrict || '' }}{{ order.addressDetail || '' }}</span>
             </div>
           </div>
-        </div>
-        
-        <div class="order-footer">
-          <span class="total">金额：<span class="amount">￥{{ order.amount }}</span></span>
+          <div class="price-info">
+            <div class="price-row">
+              <span class="price-label">商品金额</span>
+              <span class="price-value">¥{{ ((order.goodsPrice || 0) * (order.quantity || 1)).toFixed(2) }}</span>
+            </div>
+            <div class="price-row" v-if="order.freight && order.freight > 0">
+              <span class="price-label">运费</span>
+              <span class="price-value">¥{{ order.freight }}</span>
+            </div>
+            <div class="price-row discount" v-if="order.couponAmount && order.couponAmount > 0">
+              <span class="price-label">优惠券</span>
+              <span class="price-value">-¥{{ order.couponAmount }}</span>
+            </div>
+            <div class="price-row discount" v-if="order.promotionDiscount && order.promotionDiscount > 0">
+              <span class="price-label">{{ order.promotionType === 1 ? '满减' : order.promotionType === 2 ? '折扣' : '团购' }}</span>
+              <span class="price-value">-¥{{ order.promotionDiscount }}</span>
+            </div>
+            <div class="price-row total">
+              <span class="price-label">实付</span>
+              <span class="price-value">¥{{ order.amount }}</span>
+            </div>
+          </div>
           <div class="actions">
-            <button 
-              v-if="activeTab === 'buyer' && order.status === 0" 
-              class="action-btn pay" 
-              @click="goToPayment(order.id)"
-            >
-              去支付
-            </button>
-            <button 
-              v-if="activeTab === 'buyer' && order.status === 0" 
-              class="action-btn cancel" 
-              @click="handleCancel(order.id)"
-            >
-              取消订单
-            </button>
-            <button 
-              v-if="activeTab === 'buyer' && canApplyRefund(order)" 
-              class="action-btn refund" 
-              @click="openRefundDialog(order.id)"
-            >
-              申请退货
-            </button>
-            <button 
-              v-if="activeTab === 'buyer' && order.afterSaleStatus === 1" 
-              class="action-btn cancel" 
-              @click="handleCancelRefund(order.id)"
-            >
-              取消退货
-            </button>
-            <button 
-              v-if="activeTab === 'buyer' && order.afterSaleStatus === 2" 
-              class="action-btn confirm" 
-              @click="handleConfirmShipRefund(order.id)"
-            >
-              确认发货（退货）
-            </button>
-            <button 
-              v-if="activeTab === 'buyer' && canApplyDispute(order)" 
-              class="action-btn danger" 
-              @click="openDisputeDialog(order.id)"
-            >
-              平台介入
-            </button>
-            <button 
-              v-if="activeTab === 'seller' && order.status === 1" 
-              class="action-btn ship" 
-              @click="handleShip(order.id)"
-            >
-              确认发货
-            </button>
-            <button 
-              v-if="activeTab === 'buyer' && order.status === 2 && (!order.afterSaleStatus || order.afterSaleStatus === 0 || order.afterSaleStatus === 5)" 
-              class="action-btn confirm" 
-              @click="handleConfirm(order.id)"
-            >
-              确认收货
-            </button>
-            <button 
-              v-if="activeTab === 'buyer' && order.status === 3" 
-              class="action-btn comment" 
-              @click="openCommentDialog(order)"
-            >
-              发表评论
-            </button>
-            <button 
-              v-if="activeTab === 'seller' && order.afterSaleStatus === 1" 
-              class="action-btn approve" 
-              @click="handleApproveRefund(order.id)"
-            >
-              同意退货
-            </button>
-            <button 
-              v-if="activeTab === 'seller' && order.afterSaleStatus === 1" 
-              class="action-btn reject" 
-              @click="openRejectDialog(order.id)"
-            >
-              拒绝退货
-            </button>
-            <button 
-              v-if="activeTab === 'seller' && order.afterSaleStatus === 3" 
-              class="action-btn approve" 
-              @click="handleConfirmReceiveRefund(order.id)"
-            >
-              确认收货（退款）
-            </button>
-            <button 
-              v-if="activeTab === 'seller' && order.afterSaleStatus === 3" 
-              class="action-btn reject" 
-              @click="openRejectDialog(order.id)"
-            >
-              拒绝退款
-            </button>
-            <button 
-              v-if="canShowDisputeDetail(order)" 
-              class="action-btn dispute" 
-              @click="openDisputeDetail(order.id)"
-            >
-              售后详情
-            </button>
+            <button
+              v-if="activeTab === 'buyer' && order.status === 0"
+              class="action-btn pay"
+              @click.stop="goToPayment(order.id)"
+            >去支付</button>
+            <button
+              v-if="activeTab === 'buyer' && order.status === 0"
+              class="action-btn cancel"
+              @click.stop="handleCancel(order.id)"
+            >取消</button>
+            <button
+              v-if="activeTab === 'buyer' && canApplyRefund(order)"
+              class="action-btn refund"
+              @click.stop="openRefundDialog(order.id)"
+            >退货</button>
+            <button
+              v-if="activeTab === 'buyer' && order.afterSaleStatus === 1"
+              class="action-btn cancel"
+              @click.stop="handleCancelRefund(order.id)"
+            >取消退货</button>
+            <button
+              v-if="activeTab === 'seller' && order.afterSaleStatus === 1"
+              class="action-btn approve"
+              @click.stop="handleApproveRefund(order.id)"
+            >同意退货</button>
+            <button
+              v-if="activeTab === 'seller' && order.afterSaleStatus === 1"
+              class="action-btn reject"
+              @click.stop="handleRejectRefund(order.id)"
+            >拒绝</button>
+            <button
+              v-if="activeTab === 'seller' && order.afterSaleStatus === 3"
+              class="action-btn approve"
+              @click.stop="handleConfirmRefund(order.id)"
+            >确认退款</button>
+            <button
+              v-if="activeTab === 'seller' && order.status === 1"
+              class="action-btn ship"
+              @click.stop="handleShip(order.id)"
+            >发货</button>
+            <button
+              v-if="activeTab === 'buyer' && order.status === 2"
+              class="action-btn confirm"
+              @click.stop="handleConfirm(order.id)"
+            >确认收货</button>
+            <button
+              v-if="order.status === 3 && activeTab === 'buyer' && !order.hasCommented"
+              class="action-btn comment"
+              @click.stop="openCommentDialog(order)"
+            >评价</button>
+            <button
+              v-if="order.status === 3 && activeTab === 'buyer' && order.hasCommented"
+              class="action-btn detail"
+              disabled
+            >已评价</button>
+            <button
+              v-if="activeTab === 'buyer' && order.afterSaleStatus === 2"
+              class="action-btn ship"
+              @click.stop="openShipBackDialog(order.id)"
+            >填写退货物流</button>
+            <button
+              v-if="activeTab === 'buyer' && order.afterSaleStatus === 5 && disputeMap[order.id]?.status !== 1"
+              class="action-btn dispute"
+              @click.stop="openDisputeDialog(order.id)"
+            >平台介入</button>
           </div>
         </div>
       </div>
-      
-      <div 
-        v-if="currentOrders.length === 0" 
-        class="empty-state"
-      >
-        <p>暂无订单</p>
-      </div>
+    </div>
+
+    <div
+      v-if="currentOrders.length === 0"
+      class="empty-state"
+    >
+      <p>暂无订单</p>
     </div>
   </div>
 
@@ -964,480 +946,443 @@ onMounted(() => {
 
 <style scoped>
 .orders-page {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 20px;
+  max-width: 100%;
+  margin: 0;
+  padding: 16px;
+  min-height: 100vh;
+  background: #f5f5f5;
 }
 
 h2 {
-  text-align: center;
-  margin-bottom: 30px;
-}
-
-.tabs {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
-}
-
-.tab {
-  padding: 8px 20px;
-  border: 1px solid #e4e7ed;
-  border-radius: 20px;
-  background-color: #fff;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.tab:hover {
-  border-color: #409eff;
-}
-
-.tab.active {
-  background-color: #409eff;
-  color: white;
-  border-color: #409eff;
+  text-align: left;
+  margin-bottom: 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+  padding-left: 4px;
 }
 
 .status-filters {
   display: flex;
-  gap: 8px;
-  margin-bottom: 20px;
+  gap: 0;
+  margin-bottom: 12px;
   flex-wrap: wrap;
+  background: white;
+  border: 1px solid #e0e0e0;
 }
 
 .status-filter {
-  padding: 6px 14px;
-  border: 1px solid #e4e7ed;
-  border-radius: 16px;
-  background-color: #fff;
+  padding: 10px 16px;
+  border: none;
+  border-right: 1px solid #e0e0e0;
+  background: white;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s ease;
   font-size: 13px;
+  color: #666;
+}
+
+.status-filter:last-child {
+  border-right: none;
 }
 
 .status-filter:hover {
-  border-color: #409eff;
-  color: #409eff;
+  background: #f0f0f0;
+  color: #333;
 }
 
 .status-filter.active {
-  background-color: #409eff;
+  background: #333;
   color: white;
-  border-color: #409eff;
 }
 
 .status-filter .count {
   font-size: 12px;
-  opacity: 0.8;
+  opacity: 0.7;
+  margin-left: 2px;
 }
 
 .orders-list {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 8px;
+  max-width: 900px;
+  margin: 0 auto;
 }
 
 .order-card {
-  background-color: #fff;
-  border-radius: 8px;
-  padding: 15px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  background: white;
+  border-radius: 0;
+  border: 1px solid #e0e0e0;
+  transition: all 0.15s ease;
 }
 
+.order-card:hover {
+  border-color: #e53935;
+  border-width: 1px;
+}
+
+/* 订单头部 */
 .order-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #e4e7ed;
-  margin-bottom: 15px;
+  padding: 10px 12px;
+  background: #fafafa;
+  border-bottom: 1px solid #e0e0e0;
 }
 
-.status-tags {
+.header-left {
   display: flex;
-  gap: 8px;
   align-items: center;
-}
-
-.after-sale-tag {
-  font-size: 12px;
-}
-
-.after-sale-icon {
-  margin-right: 4px;
+  gap: 16px;
 }
 
 .order-id {
   font-family: monospace;
+  font-size: 14px;
+  color: #666;
 }
 
-.order-items {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.order-time {
+  font-size: 13px;
+  color: #999;
 }
 
-.order-item {
+.status-tags {
   display: flex;
-  gap: 15px;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* 订单主体 */
+.order-body {
+  display: flex;
+  padding: 16px 12px;
+  gap: 12px;
+  align-items: stretch;
+  min-height: 100px;
 }
 
 .item-image {
-  width: 80px;
-  height: 80px;
+  width: 100px;
+  height: 100px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: 0;
+  border: 1px solid #e0e0e0;
+  flex-shrink: 0;
+  align-self: center;
 }
 
 .item-info {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.item-info h4 {
-  margin: 0 0 8px 0;
-  font-size: 14px;
-}
-
-.item-info p {
-  margin: 5px 0;
-  color: #666;
-  font-size: 13px;
-}
-
-.goods-desc {
-  color: #999 !important;
-  font-size: 12px !important;
+.goods-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: #333;
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 400px;
 }
 
-.order-time {
-  color: #999 !important;
-  font-size: 12px !important;
-}
-
-.order-footer {
+.info-row {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 15px;
-  border-top: 1px solid #e4e7ed;
-  margin-top: 15px;
-}
-
-.total {
-  font-size: 16px;
-}
-
-.amount {
-  font-weight: bold;
-  color: #f56c6c;
-  font-size: 18px;
-}
-
-.actions {
-  display: flex;
-  gap: 10px;
-}
-
-.action-btn {
-  padding: 6px 16px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
+  align-items: flex-start;
+  gap: 8px;
   font-size: 14px;
 }
 
+.info-label {
+  color: #999;
+  flex-shrink: 0;
+  width: 36px;
+}
+
+.info-value {
+  color: #333;
+}
+
+.info-value.address {
+  color: #666;
+  line-height: 1.4;
+}
+
+/* 价格信息 */
+.price-info {
+  width: 130px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: right;
+}
+
+.price-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  font-size: 14px;
+  gap: 8px;
+}
+
+.price-label {
+  color: #999;
+}
+
+.price-value {
+  color: #333;
+}
+
+.price-row.discount .price-value {
+  color: #43a047;
+}
+
+.price-row.total {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.price-row.total .price-label {
+  color: #333;
+  font-weight: 500;
+}
+
+.price-row.total .price-value {
+  color: #e53935;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* 操作按钮 */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.action-btn {
+  padding: 6px 14px;
+  border: 1px solid #e0e0e0;
+  border-radius: 0;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  background: white;
+  white-space: nowrap;
+}
+
 .action-btn.pay {
-  background-color: #f56c6c;
+  background: #e53935;
   color: white;
+  border-color: #e53935;
 }
 
 .action-btn.pay:hover {
-  background-color: #f78989;
+  background: #c62828;
 }
 
 .action-btn.cancel {
-  background-color: #f5f5f5;
+  background: white;
   color: #666;
+  border-color: #e0e0e0;
 }
 
 .action-btn.cancel:hover {
-  background-color: #e4e7ed;
+  background: #f5f5f5;
 }
 
 .action-btn.refund {
-  background-color: #f56c6c;
+  background: #ff9800;
   color: white;
+  border-color: #ff9800;
 }
 
 .action-btn.refund:hover {
-  background-color: #f78989;
+  background: #f57c00;
 }
 
 .action-btn.approve {
-  background-color: #67c23a;
+  background: #43a047;
   color: white;
+  border-color: #43a047;
 }
 
 .action-btn.approve:hover {
-  background-color: #85ce61;
+  background: #388e3c;
 }
 
 .action-btn.reject {
-  background-color: #f56c6c;
+  background: #e53935;
   color: white;
+  border-color: #e53935;
 }
 
 .action-btn.reject:hover {
-  background-color: #f78989;
+  background: #c62828;
 }
 
 .action-btn.ship {
-  background-color: #67c23a;
+  background: #1e88e5;
   color: white;
+  border-color: #1e88e5;
 }
 
 .action-btn.ship:hover {
-  background-color: #85ce61;
+  background: #1565c0;
 }
 
 .action-btn.confirm {
-  background-color: #409eff;
+  background: #43a047;
   color: white;
+  border-color: #43a047;
 }
 
 .action-btn.confirm:hover {
-  background-color: #66b1ff;
+  background: #388e3c;
+}
+
+.action-btn.detail {
+  background: white;
+  color: #333;
+  border-color: #e0e0e0;
+}
+
+.action-btn.detail:hover {
+  background: #f5f5f5;
+}
+
+.action-btn.comment {
+  background: #7b1fa2;
+  color: white;
+  border-color: #7b1fa2;
+}
+
+.action-btn.comment:hover {
+  background: #6a1b9a;
+}
+
+.action-btn.dispute {
+  background: #f57c00;
+  color: white;
+  border-color: #f57c00;
+}
+
+.action-btn.dispute:hover {
+  background: #ef6c00;
+}
+
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .empty-state {
   text-align: center;
-  padding: 60px;
+  padding: 40px 20px;
   color: #999;
+  background: white;
+  border-radius: 0;
+  border: 1px solid #e0e0e0;
 }
 
-.upload-area {
-  margin-top: 10px;
-}
-
-.upload-btn {
-  display: inline-block;
-  padding: 10px 20px;
-  border: 2px dashed #d9d9d9;
-  border-radius: 6px;
-  cursor: pointer;
-  color: #999;
-  transition: all 0.2s;
-}
-
-.upload-btn:hover {
-  border-color: #409eff;
-  color: #409eff;
-}
-
-.upload-btn input {
-  display: none;
-}
-
-.uploaded-files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.uploaded-item {
-  position: relative;
-  width: 100px;
-  height: 100px;
-}
-
-.preview-image,
-.preview-video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 4px;
-}
-
-.video-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: #f5f5f5;
-  border-radius: 4px;
-  font-size: 12px;
-  overflow: hidden;
-}
-
-.video-placeholder span {
-  padding: 5px;
-  text-align: center;
-}
-
-.remove-btn {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background-color: #f56c6c;
-  color: white;
-  border: none;
-  cursor: pointer;
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.dispute-detail {
-  max-height: 500px;
-  overflow-y: auto;
-}
-
-.dispute-section {
-  padding: 15px;
-  border-radius: 8px;
-  margin-bottom: 15px;
-  background-color: #f5f7fa;
-}
-
-.buyer-section {
-  border-left: 4px solid #409eff;
-}
-
-.seller-section {
-  border-left: 4px solid #67c23a;
-}
-
-.admin-section {
-  border-left: 4px solid #e6a23c;
-  background-color: #fdf6ec;
-}
-
-.reply-section {
-  border-left: 4px solid #909399;
-  background-color: #f4f4f5;
-}
-
-.dispute-section h4 {
-  margin: 0 0 10px 0;
+.empty-state p {
   font-size: 14px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
-.badge {
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background-color: #409eff;
-  color: white;
-  font-weight: normal;
+/* 对话框样式 */
+:deep(.el-dialog) {
+  border-radius: 0;
 }
 
-.badge.success {
-  background-color: #67c23a;
-}
-
-.dispute-section .content {
+:deep(.el-dialog__header) {
+  background: #333;
+  padding: 12px 16px;
   margin: 0;
+}
+
+:deep(.el-dialog__title) {
+  color: white;
+  font-weight: 500;
   font-size: 14px;
-  color: #606266;
-  line-height: 1.6;
-  white-space: pre-wrap;
 }
 
-.dispute-section .remark {
-  margin: 8px 0 0 0;
-  font-size: 13px;
-  color: #909399;
-}
-
-.image-list {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-  flex-wrap: wrap;
-}
-
-.dispute-image {
-  width: 60px;
-  height: 60px;
-  border-radius: 4px;
-  border: 1px solid #e4e7ed;
-  cursor: pointer;
-}
-
-.dispute-image-small {
-  width: 50px;
-  height: 50px;
-  border-radius: 4px;
-  border: 1px solid #e4e7ed;
-}
-
-.upload-area-inline {
-  margin-top: 10px;
-}
-
-.upload-btn-small {
-  display: inline-block;
-  padding: 6px 12px;
-  background-color: #409eff;
+:deep(.el-dialog__headerbtn .el-dialog__close) {
   color: white;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
 }
 
-.upload-btn-small input {
-  display: none;
+:deep(.el-dialog__body) {
+  padding: 16px;
 }
 
-.image-item {
-  position: relative;
-  display: inline-block;
+:deep(.el-dialog__footer) {
+  padding: 12px 16px;
+  border-top: 1px solid #e0e0e0;
 }
 
-.remove-btn-small {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background-color: #f56c6c;
-  color: white;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+/* 响应式 */
+@media (max-width: 600px) {
+  .orders-page {
+    padding: 12px;
+  }
 
-.reply-actions {
-  margin-top: 15px;
-  display: flex;
-  gap: 10px;
-}
+  h2 {
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
 
-.action-btn.dispute {
-  background-color: #e6a23c;
-  color: white;
-  padding: 6px 16px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
+  .status-filters {
+    padding: 0;
+    gap: 0;
+  }
+
+  .status-filter {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  .order-body {
+    flex-wrap: wrap;
+  }
+
+  .item-image {
+    width: 60px;
+    height: 60px;
+  }
+
+  .price-info {
+    width: 100%;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #f0f0f0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .actions {
+    width: 100%;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #f0f0f0;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .action-btn {
+    padding: 5px 12px;
+    font-size: 11px;
+  }
 }
 </style>
