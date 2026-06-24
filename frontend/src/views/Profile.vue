@@ -19,6 +19,12 @@ const memberInfo = ref({
   discount: 1
 });
 
+// 账户余额
+const userBalance = ref(0);
+const rechargeDialogVisible = ref(false);
+const rechargeAmount = ref(100);
+const rechargeSubmitting = ref(false);
+
 const avatarUploading = ref(false);
 const avatarPreview = ref('');
 
@@ -29,6 +35,13 @@ const profileForm = ref<any>({
   avatar: ''
 });
 const profileAvatarUploading = ref(false);
+
+const passwordDialogVisible = ref(false);
+const passwordForm = ref({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+});
 
 const memberLevels = [
   { level: 1, name: '青铜VIP', minExp: 0, maxExp: 100, discount: 1, color: '#9ca3af', icon: '⭐' },
@@ -46,6 +59,20 @@ const calculateMemberLevel = (experience: number) => {
     }
   }
   return memberLevels[0];
+};
+
+// 获取角色名称
+const getRoleName = (role: number | undefined) => {
+  if (role === 1) return '管理员';
+  if (role === 2) return '卖家';
+  return '买家';
+};
+
+// 获取角色样式类
+const getRoleClass = (role: number | undefined) => {
+  if (role === 1) return 'admin';
+  if (role === 2) return 'seller';
+  return 'buyer';
 };
 
 const calculateExpFromOrders = (orders: any[]) => {
@@ -119,34 +146,77 @@ const triggerProfileAvatarUpload = () => {
 
 const saveProfile = async () => {
   if (!user.value) return;
-  
+
   if (!profileForm.value.nickname.trim()) {
     ElMessage.warning('请输入昵称');
     return;
   }
-  
+
   try {
     if (profileForm.value.avatar && profileForm.value.avatar !== user.value.avatar) {
       await api.updateAvatar(user.value.id, profileForm.value.avatar);
     }
-    
+
     await api.updateUserInfo(
       user.value.id,
       profileForm.value.nickname,
-      user.value.role
+      user.value.role,
+      profileForm.value.phone
     );
-    
+
     user.value.nickname = profileForm.value.nickname;
     user.value.phone = profileForm.value.phone;
     if (profileForm.value.avatar) {
       user.value.avatar = profileForm.value.avatar;
     }
     localStorage.setItem('user', JSON.stringify(user.value));
-    
+
     ElMessage.success('个人信息更新成功');
     profileDialogVisible.value = false;
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.msg || '更新失败');
+  }
+};
+
+const openPasswordDialog = () => {
+  passwordForm.value = {
+    oldPassword: '',
+    newPassword: '',
+    confirmPassword: ''
+  };
+  passwordDialogVisible.value = true;
+};
+
+const savePassword = async () => {
+  if (!user.value) return;
+
+  if (!passwordForm.value.oldPassword) {
+    ElMessage.warning('请输入原密码');
+    return;
+  }
+  if (!passwordForm.value.newPassword) {
+    ElMessage.warning('请输入新密码');
+    return;
+  }
+  if (passwordForm.value.newPassword.length < 6) {
+    ElMessage.warning('新密码长度不能少于6位');
+    return;
+  }
+  if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {
+    ElMessage.warning('两次输入的新密码不一致');
+    return;
+  }
+
+  try {
+    await api.updatePassword(
+      user.value.id,
+      passwordForm.value.oldPassword,
+      passwordForm.value.newPassword
+    );
+    ElMessage.success('密码修改成功');
+    passwordDialogVisible.value = false;
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.msg || '密码修改失败');
   }
 };
 
@@ -629,10 +699,58 @@ const loadProfile = async () => {
   } catch (err) {
     console.error('获取用户信息失败', err);
   }
+
+  // 加载余额
+  await loadUserBalance();
   
   loadAddresses();
   loadOrders();
   loadCoupons();
+};
+
+const loadUserBalance = async () => {
+  if (!user.value?.id) return;
+  try {
+    const res = await api.getUserBalance(user.value.id);
+    if (res.data.code === 0) {
+      userBalance.value = Number(res.data.data || 0);
+      if (user.value) {
+        user.value.balance = userBalance.value;
+        localStorage.setItem('user', JSON.stringify(user.value));
+      }
+    }
+  } catch (err) {
+    console.error('加载余额失败', err);
+  }
+};
+
+const openRechargeDialog = () => {
+  rechargeAmount.value = 100;
+  rechargeDialogVisible.value = true;
+};
+
+const handleRecharge = async () => {
+  if (!user.value?.id) return;
+  const amt = Number(rechargeAmount.value);
+  if (!amt || amt <= 0) {
+    ElMessage.warning('请输入正确的充值金额');
+    return;
+  }
+  rechargeSubmitting.value = true;
+  try {
+    const res = await api.recharge(user.value.id, amt);
+    if (res.data.code === 0) {
+      ElMessage.success('充值成功');
+      rechargeDialogVisible.value = false;
+      await loadUserBalance();
+    } else {
+      ElMessage.error(res.data.msg || '充值失败');
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.msg || '充值失败');
+  } finally {
+    rechargeSubmitting.value = false;
+  }
 };
 
 const loadCoupons = async () => {
@@ -821,11 +939,11 @@ onMounted(loadProfile);
           <div class="user-details">
             <h2 class="user-name">{{ user?.nickname || user?.username || '未设置' }}</h2>
             <div class="user-tags">
-              <span class="user-role" :class="user?.role === 2 ? 'seller' : 'buyer'">
-                {{ user?.role === 2 ? '卖家' : '买家' }}
+              <span class="user-role" :class="getRoleClass(user?.role)">
+                {{ getRoleName(user?.role) }}
               </span>
               <span 
-                v-if="user?.role !== 2" 
+                v-if="user?.role === 0" 
                 class="member-badge" 
                 :style="{ background: memberInfo.color + '20', color: memberInfo.color, borderColor: memberInfo.color }"
               >
@@ -843,7 +961,7 @@ onMounted(loadProfile);
                 <span class="meta-value">{{ user?.phone || '未设置' }}</span>
               </div>
             </div>
-            <div v-if="user?.role !== 2" class="member-info">
+            <div v-if="user?.role === 0" class="member-info">
               <div class="member-stats">
                 <div class="stat-item">
                   <span class="stat-value">{{ memberInfo.experience }}</span>
@@ -895,6 +1013,7 @@ onMounted(loadProfile);
             </div>
             <div class="user-actions">
               <el-button type="primary" @click="openProfileDialog">编辑个人信息</el-button>
+              <el-button type="warning" @click="openPasswordDialog">修改密码</el-button>
               <el-button type="danger" @click="logout">退出登录</el-button>
             </div>
           </div>
@@ -903,7 +1022,20 @@ onMounted(loadProfile);
     </div>
 
     <div class="profile-content">
-      <el-card v-if="user && user.role !== 2" class="content-card member-benefits-card">
+      <el-card v-if="user && user.role !== 1 && user.role !== 2" class="content-card balance-card">
+        <div class="card-header">
+          <h3 class="card-title">账户余额</h3>
+        </div>
+        <div class="balance-content">
+          <div class="balance-info">
+            <div class="balance-amount">¥{{ userBalance.toFixed(2) }}</div>
+            <div class="balance-tip">可用于余额支付订单</div>
+          </div>
+          <el-button type="primary" @click="openRechargeDialog">充值</el-button>
+        </div>
+      </el-card>
+
+      <el-card v-if="user && user.role !== 1 && user.role !== 2" class="content-card member-benefits-card">
         <div class="card-header">
           <h3 class="card-title">会员权益</h3>
           <span class="current-level" :style="{ color: memberInfo.color }">
@@ -934,7 +1066,7 @@ onMounted(loadProfile);
         </div>
       </el-card>
 
-      <el-card class="content-card">
+      <el-card v-if="user && user.role !== 1" class="content-card">
         <div class="card-header">
           <h3 class="card-title">我的地址</h3>
           <el-button type="primary" size="small" @click="openAddAddressDialog" class="add-btn">
@@ -976,7 +1108,7 @@ onMounted(loadProfile);
         </div>
       </el-card>
 
-      <el-card class="content-card coupon-card-container">
+      <el-card v-if="user && user.role !== 1 && user.role !== 2" class="content-card coupon-card-container">
         <div class="card-header">
           <h3 class="card-title">我的优惠券</h3>
           <span class="card-count">{{ coupons.length }} 张</span>
@@ -1062,6 +1194,24 @@ onMounted(loadProfile);
       </template>
     </el-dialog>
 
+    <el-dialog v-model="passwordDialogVisible" title="修改密码" width="400px" class="custom-dialog">
+      <el-form label-width="80px">
+        <el-form-item label="原密码">
+          <el-input v-model="passwordForm.oldPassword" type="password" placeholder="请输入原密码" show-password />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码" show-password />
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input v-model="passwordForm.confirmPassword" type="password" placeholder="请再次输入新密码" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="savePassword">确认修改</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog 
       :title="isEditAddress ? '编辑地址' : '新增地址'" 
       v-model="addressDialogVisible" 
@@ -1103,6 +1253,30 @@ onMounted(loadProfile);
       <template #footer>
         <el-button @click="closeAddressDialog">取消</el-button>
         <el-button type="primary" @click="saveAddress">{{ isEditAddress ? '保存修改' : '添加地址' }}</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="rechargeDialogVisible" title="账户充值" width="400px" class="custom-dialog">
+      <el-form label-width="80px">
+        <el-form-item label="当前余额">
+          <span class="recharge-current">¥{{ userBalance.toFixed(2) }}</span>
+        </el-form-item>
+        <el-form-item label="充值金额">
+          <el-input v-model.number="rechargeAmount" type="number" placeholder="请输入充值金额" />
+        </el-form-item>
+        <el-form-item label="快捷金额">
+          <div class="recharge-presets">
+            <el-button size="small" @click="rechargeAmount = 50">¥50</el-button>
+            <el-button size="small" @click="rechargeAmount = 100">¥100</el-button>
+            <el-button size="small" @click="rechargeAmount = 200">¥200</el-button>
+            <el-button size="small" @click="rechargeAmount = 500">¥500</el-button>
+            <el-button size="small" @click="rechargeAmount = 1000">¥1000</el-button>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="rechargeDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="rechargeSubmitting" @click="handleRecharge">确认充值</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1196,6 +1370,11 @@ onMounted(loadProfile);
 
 .user-role.seller {
   background: #ff9800;
+  color: white;
+}
+
+.user-role.admin {
+  background: #9c27b0;
   color: white;
 }
 
@@ -1874,5 +2053,70 @@ onMounted(loadProfile);
   font-size: 12px;
   color: #999;
   margin-top: 4px;
+}
+
+.balance-card {
+  background: linear-gradient(135deg, #ff6700 0%, #ff5000 100%);
+  color: white;
+  border: none;
+}
+
+.balance-card .card-header {
+  background: transparent;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.balance-card .card-title {
+  color: white;
+}
+
+.balance-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 4px;
+}
+
+.balance-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.balance-amount {
+  font-size: 32px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -1px;
+}
+
+.balance-tip {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.balance-card .el-button {
+  background: white;
+  color: #ff6700;
+  border: none;
+  font-weight: 500;
+  padding: 10px 24px;
+}
+
+.balance-card .el-button:hover {
+  background: #fff5e6;
+  color: #ff5000;
+}
+
+.recharge-current {
+  font-size: 18px;
+  font-weight: 600;
+  color: #ff6700;
+}
+
+.recharge-presets {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 </style>

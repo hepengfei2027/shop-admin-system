@@ -18,8 +18,8 @@ public interface UserMapper {
     @Select("SELECT * FROM user")
     List<User> findAll();
 
-    @Insert("INSERT INTO user(username, password, nickname, phone, role, status, banned_until, create_time, member_level, experience, discount) " +
-            "VALUES(#{username}, #{password}, #{nickname}, #{phone}, #{role}, #{status}, #{bannedUntil}, NOW(), 1, 0, 1.0)")
+    @Insert("INSERT INTO user(username, password, nickname, phone, role, status, banned_until, create_time, member_level, experience, discount, balance) " +
+            "VALUES(#{username}, #{password}, #{nickname}, #{phone}, #{role}, #{status}, #{bannedUntil}, NOW(), 1, 0, 1.0, 0)")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(User user);
 
@@ -44,5 +44,15 @@ public interface UserMapper {
     @Update("UPDATE user SET member_level = #{memberLevel}, experience = #{experience}, discount = #{discount} WHERE id = #{id}")
     int updateMemberInfo(@Param("id") Long id, @Param("memberLevel") Integer memberLevel, 
                         @Param("experience") Integer experience, @Param("discount") Double discount);
+
+    @Update("UPDATE user SET password = #{password} WHERE id = #{id}")
+    int updatePassword(@Param("id") Long id, @Param("password") String password);
+
+    // 余额相关
+    @Update("UPDATE user SET balance = balance + #{amount} WHERE id = #{id}")
+    int addBalance(@Param("id") Long id, @Param("amount") java.math.BigDecimal amount);
+
+    @Update("UPDATE user SET balance = balance - #{amount} WHERE id = #{id} AND balance >= #{amount}")
+    int deductBalance(@Param("id") Long id, @Param("amount") java.math.BigDecimal amount);
 }
 

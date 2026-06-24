@@ -45,6 +45,13 @@ public class GoodsController {
         return Result.ok(addPromotionInfo(goodsList));
     }
 
+    // 管理员获取所有商品（包括已下架、审核中等）
+    @GetMapping("/all")
+    public Result<List<Goods>> listAll() {
+        List<Goods> goodsList = goodsService.listAll();
+        return Result.ok(goodsList);
+    }
+
     @GetMapping("/search")
     public Result<List<GoodsWithPromotionDTO>> search(@RequestParam String keyword) {
         List<Goods> goodsList = goodsService.search(keyword);

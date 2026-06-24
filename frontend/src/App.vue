@@ -77,9 +77,9 @@ const getUserRoleLabel = (role: number) => {
     case 1:
       return '管理员';
     case 2:
-      return '卖家';
+      return '商家';
     default:
-      return '买家';
+      return '用户';
   }
 };
 
@@ -104,7 +104,7 @@ const logout = () => {
 <!--导航栏高度-->
     <el-header style="height: 25px">
       <div class="nav">
-        <div class="logo" @click="$router.push('/')">JD</div>
+        <div class="logo" @click="$router.push('/')">电商管理平台</div>
         <!-- 移动端菜单按钮 -->
         <div class="mobile-menu-button" v-if="isMobile" @click="mobileMenuVisible = !mobileMenuVisible">
           <el-icon v-if="!mobileMenuVisible"><Menu /></el-icon>

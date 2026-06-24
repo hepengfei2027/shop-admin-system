@@ -40,11 +40,15 @@ const editForm = ref<any>({
 });
 const uploading = ref(false);
 
-// 团购活动相关
-const groupBuyActivities = ref<any[]>([]);
-const groupBuyParticipants = ref<Record<number, any[]>>({});
-const groupBuyDialogVisible = ref(false);
-const hasGroupBuyOrder = ref(false);
+// 地址相关
+const addressList = ref<any[]>([]);
+const selectedAddressId = ref<number | null>(null);
+
+// 计算选中的地址对象
+const selectedAddress = computed(() => {
+  if (!selectedAddressId.value) return null;
+  return addressList.value.find(addr => addr.id === selectedAddressId.value) || null;
+});
 
 // 限时折扣活动
 const discountActivity = ref<any>(null);
@@ -52,45 +56,48 @@ const discountActivity = ref<any>(null);
 // 满减活动
 const fullReduceActivity = ref<any>(null);
 
-const currentGroupBuy = computed(() => {
-  if (!goods.value) return null;
-  return groupBuyActivities.value.find(
-    (act: any) => act.goodsId === goods.value.id && act.status === '进行中'
-  ) || null;
-});
-
-const canJoinGroupBuy = computed(() => {
-  if (!currentGroupBuy.value || !user.value) return false;
-  if (hasGroupBuyOrder.value) return false;
-  const participants = groupBuyParticipants.value[currentGroupBuy.value.id] || [];
-  return !participants.some((p: any) => p.userId === user.value.id);
-});
-
-const isInGroupBuy = computed(() => {
-  if (!currentGroupBuy.value || !user.value) return false;
-  const participants = groupBuyParticipants.value[currentGroupBuy.value.id] || [];
-  return participants.some((p: any) => p.userId === user.value.id);
-});
-
-const groupBuyProgress = computed(() => {
-  if (!currentGroupBuy.value) return { current: 0, min: 0, percentage: 0 };
-  const participants = groupBuyParticipants.value[currentGroupBuy.value.id] || [];
-  const current = participants.length;
-  const min = currentGroupBuy.value.minGroupSize;
-  return {
-    current,
-    min,
-    percentage: Math.min((current / min) * 100, 100)
-  };
-});
-
-// 计算商品折扣价
+// 计算商品折扣价（考虑会员折扣和限时折扣）
 const discountedPrice = computed(() => {
   if (!goods.value) return 0;
+  let price = goods.value.price;
+
+  // 先应用会员折扣
+  const memberDiscount = (user.value?.discount !== undefined && user.value?.discount !== null) ? user.value.discount : 1;
+  price = price * memberDiscount;
+
+  // 再应用限时折扣
   if (discountActivity.value) {
-    return (goods.value.price * (discountActivity.value.ruleDetail?.discountRate || 1)).toFixed(2);
+    price = price * (discountActivity.value.ruleDetail?.discountRate || 1);
   }
-  return goods.value.price;
+
+  return price.toFixed(2);
+});
+
+// 计算最终价格（考虑满减和优惠券）
+const finalPrice = computed(() => {
+  if (!goods.value) return 0;
+  let price = parseFloat(discountedPrice.value);
+
+  // 满减优惠
+  if (fullReduceActivity.value && price >= fullReduceActivity.value.thresholdAmount) {
+    price = price - fullReduceActivity.value.reductionAmount;
+  }
+
+  // 最大可用优惠券
+  const maxCoupon = availableCoupons.value
+    .filter((c: any) => price >= (c.minAmount || 0))
+    .sort((a: any, b: any) => b.amount - a.amount)[0];
+  if (maxCoupon) {
+    price = price - maxCoupon.amount;
+  }
+
+  return Math.max(0, price).toFixed(2);
+});
+
+// 节省金额
+const savedAmount = computed(() => {
+  if (!goods.value) return 0;
+  return Math.max(0, goods.value.price - parseFloat(finalPrice.value)).toFixed(2);
 });
 
 const loadPromotions = async () => {
@@ -99,7 +106,7 @@ const loadPromotions = async () => {
     const res = await api.getGoodsPromotions(goods.value.id);
     if (res.data.code === 0) {
       const activities = res.data.data || [];
-      
+
       // 限时折扣活动
       const discountAct = activities.find((a: any) => a.type === 2 && a.status === 1);
       if (discountAct) {
@@ -108,7 +115,7 @@ const loadPromotions = async () => {
           discountRate: discountAct.ruleDetail?.discountRate || 0.8
         };
       }
-      
+
       // 满减活动
       const fullReduceAct = activities.find((a: any) => a.type === 1 && a.status === 1);
       if (fullReduceAct) {
@@ -118,111 +125,10 @@ const loadPromotions = async () => {
           reductionAmount: fullReduceAct.ruleDetail?.reductionAmount || 10
         };
       }
-      
-      // 团购活动
-      const groupActivities = activities.filter((a: any) => a.type === 3);
-      groupBuyActivities.value = groupActivities.map((a: any) => ({
-        ...a,
-        groupPrice: a.ruleDetail?.groupPrice || 0,
-        minGroupSize: a.ruleDetail?.minGroupSize || 2,
-        maxGroupSize: a.ruleDetail?.maxGroupSize || 10,
-        currentSize: a.ruleDetail?.currentSize || 0,
-        status: a.status === 1 ? '进行中' : '已结束'
-      }));
-      
-      // 加载团购参与人数
-      for (const activity of groupActivities) {
-        try {
-          const pRes = await api.getGroupParticipants(activity.id);
-          if (pRes.data.code === 0) {
-            groupBuyParticipants.value[activity.id] = pRes.data.data?.participants || [];
-          }
-        } catch (e) {
-          console.error('加载团购参与人数失败', e);
-        }
-      }
-
-      // 检查用户是否已有该商品的团购订单
-      if (user.value && groupActivities.length > 0) {
-        try {
-          const orderRes = await api.listBuyerOrdersWithDetails(user.value.id);
-          if (orderRes.data.code === 0) {
-            const orders = orderRes.data.data || [];
-            hasGroupBuyOrder.value = orders.some((order: any) =>
-              order.goodsId === goods.value.id &&
-              order.promotionType === 3 &&
-              order.status !== 4
-            );
-          }
-        } catch (e) {
-          console.error('检查团购订单失败', e);
-        }
-      }
     }
   } catch (e) {
     console.error('加载营销活动失败', e);
   }
-};
-
-// 兼容旧函数名
-const loadGroupBuyActivities = loadPromotions;
-
-const joinGroupBuy = async () => {
-  if (!user.value) {
-    ElMessage.warning('请先登录');
-    router.push('/login');
-    return;
-  }
-  if (!currentGroupBuy.value) return;
-
-  try {
-    const res = await api.joinGroupBuy({
-      activityId: currentGroupBuy.value.id,
-      userId: user.value.id,
-      username: user.value.username || user.value.nickname || '用户'
-    });
-    
-    if (res.data.code === 0) {
-      const data = res.data.data;
-      // 重新加载团购活动
-      await loadGroupBuyActivities();
-      
-      if (data.isSuccess) {
-        ElMessage.success(`团购成功！当前 ${data.currentSize}/${data.minGroupSize} 人，已达到成团人数`);
-      } else {
-        ElMessage.success(`已加入团购！当前 ${data.currentSize}/${data.minGroupSize} 人`);
-      }
-    } else {
-      ElMessage.warning(res.data.msg || '加入团购失败');
-    }
-  } catch (err: any) {
-    ElMessage.error(err?.response?.data?.msg || '加入团购失败');
-  }
-};
-
-const onGroupBuyBuy = () => {
-  if (!user.value) {
-    ElMessage.warning('请先登录');
-    router.push('/login');
-    return;
-  }
-  if (!currentGroupBuy.value) return;
-
-  const actId = currentGroupBuy.value.id;
-  const participants = groupBuyParticipants.value[actId] || [];
-
-  if (participants.length < currentGroupBuy.value.minGroupSize) {
-    ElMessage.warning(`团购人数不足，当前 ${participants.length}/${currentGroupBuy.value.minGroupSize} 人，未达到成团条件`);
-    return;
-  }
-
-  if (!participants.some((p: any) => p.userId === user.value.id)) {
-    ElMessage.warning('您需要先加入团购才能下单');
-    return;
-  }
-
-  // 跳转到确认订单页面，带上团购参数
-  router.push(`/confirm-order?goodsId=${goods.value.id}&groupBuyId=${currentGroupBuy.value.id}&groupPrice=${currentGroupBuy.value.groupPrice}`);
 };
 
 const categories = [
@@ -277,6 +183,23 @@ watch(user, () => {
   loadCart();
 }, { deep: true });
 
+// 加载用户地址
+const loadAddresses = async () => {
+  if (!user.value?.id) return;
+  try {
+    const res = await api.getAddresses(user.value.id);
+    if (res.data.code === 0) {
+      addressList.value = res.data.data || [];
+      // 默认选择第一个地址
+      if (addressList.value.length > 0 && !selectedAddressId.value) {
+        selectedAddressId.value = addressList.value[0].id;
+      }
+    }
+  } catch (err) {
+    console.error('加载地址失败', err);
+  }
+};
+
 const loadDetail = async () => {
   loadCart();
 
@@ -298,10 +221,11 @@ const loadDetail = async () => {
 
   // 在商品数据加载后再获取营销活动信息
   if (goods.value) {
-    await loadGroupBuyActivities();
+    await loadPromotions();
   }
 
   await loadComments();
+  await loadAddresses();
 };
 
 const mediaMap = ref<Record<number, any[]>>({});
@@ -375,8 +299,15 @@ const onBuy = async () => {
     return;
   }
 
-  // 跳转到确认订单页面
-  router.push(`/confirm-order?goodsId=${goods.value.id}`);
+  // 检查是否选择了地址
+  if (addressList.value.length > 0 && !selectedAddressId.value) {
+    ElMessage.warning('请选择收货地址');
+    return;
+  }
+
+  // 跳转到确认订单页面，传递地址ID
+  const addressId = selectedAddressId.value || '';
+  router.push(`/confirm-order?goodsId=${goods.value.id}${addressId ? `&addressId=${addressId}` : ''}`);
 };
 
 const addToCart = () => {
@@ -497,7 +428,7 @@ const loadAllAvailableCoupons = async () => {
     } else {
       availableCoupons.value = [];
     }
-    
+
     const userCouponsRes = await api.getUserCoupons(user.value.id);
     if (userCouponsRes.data.code === 0 && userCouponsRes.data.data) {
       claimedCouponIds.value = userCouponsRes.data.data.map((c: any) => c.id);
@@ -653,234 +584,240 @@ onMounted(() => {
 
 <template>
   <div v-if="goods" class="detail-page">
-    <div class="detail-container">
-      <div class="goods-main">
+    <div class="container-wrap">
+      <!-- 主商品区域 -->
+      <div class="goods-main-row">
+        <!-- 左侧图片区 -->
         <div class="goods-image-card">
           <div class="image-wrapper">
             <img
-              v-if="goods.imageUrl"
-              :src="goods.imageUrl"
-              alt="商品图片"
-              class="goods-image"
+                v-if="goods.imageUrl"
+                :src="resolveMediaUrl(goods.imageUrl)"
+                alt="商品图片"
+                class="goods-image"
             />
             <div v-else class="image-placeholder">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <rect x="3" y="3" width="18" height="18" rx="2"/>
                 <circle cx="8.5" cy="8.5" r="1.5"/>
                 <path d="M21 15l-5-5L5 21"/>
               </svg>
+              <p>暂无商品图</p>
             </div>
+            <!-- 营销角标 -->
+            <div class="corner-tag" v-if="discountActivity">限时折扣</div>
           </div>
         </div>
 
+        <!-- 右侧信息区 -->
         <div class="goods-info-card">
-          <div class="goods-header">
-            <h1 class="goods-title">{{ goods.title }}</h1>
-            <p class="goods-description">{{ goods.description }}</p>
-          </div>
-
-          <div class="goods-price-section">
-            <div class="price-row">
-              <span class="price-label">价格</span>
-              <div class="price-display">
-                <span v-if="showMemberPrice && !discountActivity" class="original-price">￥{{ goods.price }}</span>
-                <span v-if="discountActivity" class="original-price">￥{{ goods.price }}</span>
-                <span v-if="discountActivity" class="goods-price discount-price">￥{{ discountedPrice }}</span>
-                <span v-else class="goods-price">￥{{ getMemberPrice(goods.price) }}</span>
-                <span v-if="showMemberPrice" class="member-tag">会员价</span>
-                <span v-if="discountActivity" class="discount-tag">{{ (discountActivity.discountRate * 10).toFixed(1) }}折</span>
-              </div>
-            </div>
-
-            <!-- 限时折扣信息 -->
-            <div v-if="discountActivity" class="discount-entry">
-              <span class="discount-badge">🔥 限时折扣</span>
-              <span class="discount-text">限时 {{ (discountActivity.discountRate * 10).toFixed(1) }} 折优惠</span>
-            </div>
-
-            <!-- 满减信息 -->
-            <div v-if="fullReduceActivity" class="fullreduce-entry">
-              <span class="fullreduce-badge">🎯 满减优惠</span>
-              <span class="fullreduce-text">满 {{ fullReduceActivity.thresholdAmount }} 减 {{ fullReduceActivity.reductionAmount }}</span>
-            </div>
-
-            <!-- 团购信息 -->
-            <div v-if="currentGroupBuy" class="groupbuy-entry">
-              <div class="groupbuy-header">
-                <span class="groupbuy-badge">👥 团购</span>
-                <span class="groupbuy-price">¥{{ currentGroupBuy.groupPrice }}</span>
-                <span class="groupbuy-original">¥{{ goods.price }}</span>
-              </div>
-              <div class="groupbuy-progress-bar">
-                <div class="groupbuy-progress-fill" :style="{ width: groupBuyProgress.percentage + '%' }"></div>
-              </div>
-              <div class="groupbuy-status">
-                <span>{{ groupBuyProgress.current }}/{{ groupBuyProgress.min }}人已成团</span>
-                <span v-if="groupBuyProgress.current >= groupBuyProgress.min" class="groupbuy-success">已成团，可下单</span>
-                <span v-else class="groupbuy-pending">还差 {{ groupBuyProgress.min - groupBuyProgress.current }} 人</span>
-              </div>
-            </div>
-
-            <div v-if="user && user.id !== goods.sellerId" class="coupon-entry" @click="openCouponListDialog">
-              <svg class="coupon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-                <line x1="7" y1="7" x2="7.01" y2="7"/>
-              </svg>
-              <span class="coupon-text">{{ availableCoupons.length > 0 ? `可领 ${availableCoupons.length} 张优惠券` : '暂无可用优惠券' }}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">运费</span>
-              <span v-if="goods.freight && goods.freight > 0" class="info-value">￥{{ goods.freight }}</span>
-              <span v-else class="info-value free-shipping">包邮</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">库存</span>
-              <span class="info-value">{{ goods.stock }} 件</span>
-            </div>
-          </div>
-
-          <div class="seller-section">
-            <div class="seller-label">卖家信息</div>
-            <div class="seller-info">
+          <!-- 卖家卡片 -->
+          <div class="seller-card">
+            <div class="seller-avatar-wrap">
               <img
-                v-if="seller?.avatar"
-                :src="seller.avatar"
-                :alt="seller?.nickname || seller?.username"
-                class="seller-avatar"
+                  v-if="seller?.avatar"
+                  :src="resolveMediaUrl(seller.avatar)"
+                  :alt="seller?.nickname || seller?.username"
+                  class="seller-avatar"
               />
               <div v-else class="seller-avatar-placeholder">
                 {{ (seller?.nickname || seller?.username || '卖').charAt(0) }}
               </div>
-              <div class="seller-details">
-                <span class="seller-name">{{ seller?.nickname || seller?.username || '未知' }}</span>
-                <span class="seller-text">卖家</span>
+            </div>
+            <div class="seller-meta">
+              <div class="seller-name">{{ seller?.nickname || seller?.username || '未知店铺' }}</div>
+              <div class="seller-desc">官方认证卖家 · 极速发货</div>
+            </div>
+          </div>
+
+          <!-- 标题描述 -->
+          <div class="goods-header">
+            <div class="title-row">
+              <span v-if="goods.brandName" class="brand-tag" :style="{ backgroundColor: goods.brandColor || '#ff1744' }">
+                {{ goods.brandName }}
+              </span>
+              <h1 class="goods-title">{{ goods.title }}</h1>
+            </div>
+            <p class="goods-desc">{{ goods.description }}</p>
+          </div>
+
+          <!-- 价格模块 -->
+          <div class="price-block">
+            <div class="price-main">
+              <span class="price-symbol">¥</span>
+              <span class="final-price">{{ finalPrice }}</span>
+              <span class="arrive-price-tag">到手价</span>
+              <span v-if="goods.price > Number(finalPrice)" class="origin-price-line">¥{{ goods.price }}</span>
+            </div>
+
+            <!-- 价格明细折叠面板 -->
+            <div class="price-detail-panel" v-if="showMemberPrice || discountActivity || fullReduceActivity || availableCoupons.filter(c => Number(discountedPrice) >= (c.minAmount || 0)).length">
+              <div class="detail-row" v-if="showMemberPrice">
+                <span class="label">💜 会员专享价</span>
+                <span class="val">¥{{ getMemberPrice(goods.price) }}</span>
+              </div>
+              <div class="detail-row" v-if="discountActivity">
+                <span class="label">🔥 限时折扣</span>
+                <span class="val red">{{ (discountActivity.discountRate * 10).toFixed(1) }}折</span>
+              </div>
+              <div class="detail-row" v-if="fullReduceActivity && Number(discountedPrice) >= fullReduceActivity.thresholdAmount">
+                <span class="label">🎯 满减优惠</span>
+                <span class="val green">-¥{{ fullReduceActivity.reductionAmount }}</span>
+              </div>
+              <div class="detail-row" v-if="availableCoupons.filter(c => Number(discountedPrice) >= (c.minAmount || 0)).length > 0">
+                <span class="label">🎫 优惠券抵扣</span>
+                <span class="val green">-¥{{ availableCoupons.filter(c => Number(discountedPrice) >= (c.minAmount || 0)).sort((a,b)=>b.amount-a.amount)[0]?.amount }}</span>
+              </div>
+              <div class="detail-row save-row" v-if="Number(savedAmount) > 0">
+                <span class="label">💰 共省</span>
+                <span class="val red save-amount">立省 ¥{{ savedAmount }}</span>
+              </div>
+            </div>
+
+            <!-- 活动标签组 -->
+            <div class="tag-group">
+              <div v-if="discountActivity" class="tag tag-red">限时{{ (discountActivity.discountRate*10).toFixed(1) }}折</div>
+              <div v-if="fullReduceActivity" class="tag tag-green">满{{ fullReduceActivity.thresholdAmount }}减{{ fullReduceActivity.reductionAmount }}</div>
+            </div>
+
+            <!-- 优惠券入口 -->
+            <div class="coupon-entry-box" @click="openCouponListDialog" v-if="user && user.id !== goods.sellerId">
+              <svg class="coupon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                <line x1="7" y1="7" x2="7.01" y2="7"/>
+              </svg>
+              <span class="text">{{ availableCoupons.length > 0 ? `有${availableCoupons.length}张优惠券可领取` : '暂无可用优惠券' }}</span>
+              <span class="arrow">></span>
+            </div>
+
+            <!-- 地址选择 -->
+            <div class="address-select-box" v-if="user && user.role === 0">
+              <div class="address-label">
+                <svg class="addr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
+                  <circle cx="12" cy="10" r="3"/>
+                </svg>
+                <span>配送至</span>
+              </div>
+              <div class="address-content">
+                <template v-if="addressList.length > 0">
+                  <el-select
+                    v-model="selectedAddressId"
+                    placeholder="选择收货地址"
+                    class="address-select"
+                    size="large"
+                  >
+                    <el-option
+                      v-for="addr in addressList"
+                      :key="addr.id"
+                      :label="`${addr.name} ${addr.phone} ${addr.province}${addr.city}${addr.district}${addr.detail}`"
+                      :value="addr.id"
+                    />
+                  </el-select>
+                </template>
+                <div v-else class="no-address-tip">
+                  <span>暂无收货地址</span>
+                  <el-button type="primary" link @click="router.push('/profile?tab=address')">去添加</el-button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 基础信息 -->
+            <div class="base-info">
+              <div class="info-item">
+                <span class="info-label">运费</span>
+                <span class="info-val" v-if="goods.freight > 0">¥{{ goods.freight }}</span>
+                <span class="info-val free" v-else>包邮</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">库存</span>
+                <span class="info-val">{{ goods.stock }}件</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">分类</span>
+                <span class="info-val">{{ goods.category || '未分类' }}</span>
               </div>
             </div>
           </div>
 
-          <div class="action-section">
-            <template v-if="user && user.id === goods.sellerId">
-              <el-button type="primary" class="action-btn edit-btn" @click="editGoods">
-                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                </svg>
-                编辑商品
-              </el-button>
-              <el-button type="warning" class="action-btn coupon-btn" @click="openCouponDialog">
-                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-                  <line x1="7" y1="7" x2="7.01" y2="7"/>
-                </svg>
-                发放优惠券
-              </el-button>
-            </template>
-            <template v-else>
-              <!-- 团购按钮 -->
-              <template v-if="currentGroupBuy">
-                <el-button v-if="canJoinGroupBuy" type="warning" class="action-btn groupbuy-join-btn" @click="joinGroupBuy">
-                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                    <circle cx="9" cy="7" r="4"/>
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                  </svg>
-                  参加团购 ¥{{ currentGroupBuy.groupPrice }}
-                </el-button>
-                <el-button v-else-if="groupBuyProgress.current >= groupBuyProgress.min" type="danger" class="action-btn groupbuy-buy-btn" @click="onGroupBuyBuy">
-                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="9" cy="21" r="1"/>
-                    <circle cx="20" cy="21" r="1"/>
-                    <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
-                  </svg>
-                  团购下单 ¥{{ currentGroupBuy.groupPrice }}
-                </el-button>
-                <el-button v-else-if="hasGroupBuyOrder" type="info" class="action-btn groupbuy-wait-btn" disabled>
-                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"/>
-                    <polyline points="12 6 12 12 16 14"/>
-                  </svg>
-                  已下单等待拼团
-                </el-button>
-                <el-button v-else type="info" class="action-btn groupbuy-wait-btn" disabled>
-                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"/>
-                    <polyline points="12 6 12 12 16 14"/>
-                  </svg>
-                  等待成团 {{ groupBuyProgress.current }}/{{ groupBuyProgress.min }}
-                </el-button>
-              </template>
-              <el-button v-if="!currentGroupBuy" type="danger" class="action-btn buy-btn" @click="onBuy">
-                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="9" cy="21" r="1"/>
-                  <circle cx="20" cy="21" r="1"/>
-                  <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
-                </svg>
-                立即购买
-              </el-button>
-              <el-button class="action-btn cart-btn" @click="addToCart">
-                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
-                  <line x1="3" y1="6" x2="21" y2="6"/>
-                  <path d="M16 10a4 4 0 0 1-8 0"/>
-                </svg>
-                加入购物车
-              </el-button>
-              <el-button class="action-btn chat-btn" @click="openChat">
-                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                </svg>
-                私聊卖家
-              </el-button>
-            </template>
+          <!-- 操作按钮 -->
+          <div class="action-btn-group" v-if="user && user.role === 0">
+            <el-button type="danger" size="large" class="buy-btn" @click="onBuy">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="9" cy="21" r="1"/>
+                <circle cx="20" cy="21" r="1"/>
+                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+              </svg>
+              立即购买
+            </el-button>
+            <el-button size="large" class="cart-btn" @click="addToCart">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
+                <line x1="3" y1="6" x2="21" y2="6"/>
+                <path d="M16 10a4 4 0 0 1-8 0"/>
+              </svg>
+              加入购物车
+            </el-button>
+            <el-button size="large" class="chat-btn" @click="openChat">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+              联系卖家
+            </el-button>
           </div>
         </div>
       </div>
 
-      <div class="comment-section">
-        <div class="section-header">
-          <h2 class="section-title">商品评价</h2>
-          <span class="comment-count">{{ comments.length }} 条评价</span>
+      <!-- 评价区域 -->
+      <div class="comment-container">
+        <div class="comment-head">
+          <h2 class="comment-title">商品评价</h2>
+          <span class="count-tag">共{{ comments.length }}条评价</span>
         </div>
 
-        <div class="comment-list">
-          <div v-if="comments.length === 0" class="empty-comments">
-            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <div class="comment-list-wrap">
+          <div v-if="comments.length === 0" class="empty-comment-box">
+            <svg class="empty-svg" viewBox="0 0 24 24" fill="none" stroke="#dcdcdc" stroke-width="1.5">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
             </svg>
-            <p>暂无评价</p>
+            <p>暂时还没有用户评价，期待你的第一条反馈~</p>
           </div>
+
           <div v-for="comment in comments" :key="comment.id" class="comment-card">
-            <div class="comment-header">
-              <img
-                v-if="getUserAvatar(comment.userId)"
-                :src="getUserAvatar(comment.userId)"
-                :alt="getUserName(comment.userId)"
-                class="comment-avatar"
-              />
-              <div v-else class="comment-avatar-placeholder">
-                {{ getUserName(comment.userId).charAt(0) }}
+            <div class="comment-top">
+              <div class="user-avatar">
+                <img
+                    v-if="getUserAvatar(comment.userId)"
+                    :src="resolveMediaUrl(getUserAvatar(comment.userId))"
+                    class="avatar-img"
+                />
+                <div v-else class="avatar-text">{{ getUserName(comment.userId).charAt(0) }}</div>
               </div>
-              <div class="comment-user-info">
-                <span class="comment-user">{{ getUserName(comment.userId) }}</span>
+              <div class="user-info">
+                <div class="username">{{ getUserName(comment.userId) }}</div>
                 <el-rate :model-value="comment.rating" disabled size="small" />
               </div>
-              <span class="comment-time">{{ new Date(comment.createTime).toLocaleString() }}</span>
+              <div class="time-text">{{ new Date(comment.createTime).toLocaleString() }}</div>
             </div>
-            <div class="comment-content">{{ comment.content }}</div>
-            <div v-if="getCommentMedia(comment.id)?.length > 0" class="comment-media">
-              <div v-for="(media, index) in getCommentMedia(comment.id)" :key="index" class="media-item">
-                <img v-if="isImageMedia(media)" :src="media.fullUrl" alt="评论图片" class="comment-image" />
-                <video v-else-if="isVideoMedia(media)" :src="media.fullUrl" controls class="comment-image"></video>
+
+            <div class="comment-text">{{ comment.content }}</div>
+
+            <!-- 评论图片视频 -->
+            <div class="media-row" v-if="getCommentMedia(comment.id).length">
+              <div v-for="(media, idx) in getCommentMedia(comment.id)" :key="idx" class="media-item">
+                <img v-if="isImageMedia(media)" :src="media.fullUrl" class="media-img" />
+                <video v-else-if="isVideoMedia(media)" :src="media.fullUrl" controls class="media-img"></video>
               </div>
             </div>
-            <div v-if="user && user.role === 2 && user.id === goods.sellerId" class="comment-actions">
-              <el-button type="text" class="reply-btn" @click="openReplyDialog(comment.id)">
-                <svg class="reply-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+
+            <!-- 卖家回复按钮 -->
+            <div class="reply-btn-wrap" v-if="user && user.role === 2 && user.id === goods.sellerId">
+              <el-button text type="primary" @click="openReplyDialog(comment.id)">
+                <svg class="reply-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polyline points="9 14 4 9 9 4"/>
                   <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
                 </svg>
-                回复
+                回复这条评价
               </el-button>
             </div>
           </div>
@@ -888,1042 +825,828 @@ onMounted(() => {
       </div>
     </div>
 
-    <el-dialog v-model="dialogVisible" title="发送消息" width="500px" class="message-dialog">
-      <el-input
-        v-model="messageContent"
-        type="textarea"
-        :rows="4"
-        placeholder="请输入消息内容"
-        maxlength="500"
-        show-word-limit
-      />
+    <!-- 弹窗：发消息 -->
+    <el-dialog v-model="dialogVisible" title="私信卖家" width="520px" class="common-dialog" :mask-closable="false">
+      <el-input v-model="messageContent" type="textarea" :rows="5" maxlength="500" show-word-limit placeholder="输入你想咨询的问题..."/>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="sendMessage">发送</el-button>
+        <div class="dialog-footer">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="danger" @click="sendMessage">发送消息</el-button>
+        </div>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="replyDialogVisible" title="回复评论" width="500px" class="reply-dialog">
-      <el-input
-        v-model="replyForm.content"
-        type="textarea"
-        :rows="3"
-        placeholder="请输入回复内容"
-      />
+    <!-- 弹窗：回复评论 -->
+    <el-dialog v-model="replyDialogVisible" title="回复用户评价" width="500px" class="common-dialog" :mask-closable="false">
+      <el-input v-model="replyForm.content" type="textarea" :rows="4" placeholder="礼貌回复用户评价..."/>
       <template #footer>
-        <el-button @click="replyDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleReply">提交回复</el-button>
+        <div class="dialog-footer">
+          <el-button @click="replyDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleReply">提交回复</el-button>
+        </div>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="couponDialogVisible" title="发放优惠券" width="400px" class="coupon-dialog">
-      <div class="coupon-form">
-        <el-input-number v-model="couponAmount" :min="1" :max="1000" label="优惠券金额" style="width: 100%;" />
-        <p class="coupon-tip">设置优惠券的优惠金额（单位：元）</p>
+    <!-- 弹窗：发放优惠券 -->
+    <el-dialog v-model="couponDialogVisible" title="创建商品优惠券" width="440px" class="common-dialog">
+      <div class="coupon-create-form">
+        <el-input-number v-model="couponAmount" label="优惠金额" :min="1" :max="999" style="width:100%"/>
+        <p class="tip-text">设置优惠券抵扣金额，用户下单直接减免</p>
       </div>
       <template #footer>
-        <el-button @click="couponDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="issueCoupon">发放</el-button>
+        <div class="dialog-footer">
+          <el-button @click="couponDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="issueCoupon">确认发放</el-button>
+        </div>
       </template>
     </el-dialog>
 
-    <el-dialog
-        v-model="editDialogVisible"
-        title="编辑商品"
-        width="600px"
-    >
-      <el-form label-width="80px" class="edit-form">
-        <el-form-item label="标题">
-          <el-input v-model="editForm.title" />
+    <!-- 弹窗：优惠券列表 -->
+    <el-dialog v-model="couponListDialogVisible" title="全部可用优惠券" width="540px" class="common-dialog" @close="closeCouponListDialog">
+      <div class="coupon-list-container">
+        <div v-if="availableCoupons.length === 0" class="empty-coupon">
+          <svg class="empty-svg" viewBox="0 0 24 24" fill="none" stroke="#ddd" stroke-width="2">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+            <line x1="7" y1="7" x2="7.01" y2="7"/>
+          </svg>
+          <p>暂无优惠券，敬请期待</p>
+        </div>
+        <div v-for="coupon in availableCoupons" :key="coupon.id" class="coupon-card-item">
+          <div class="coupon-left-block">
+            <span class="money">¥{{ coupon.amount }}</span>
+            <span v-if="coupon.minAmount" class="limit">满{{ coupon.minAmount }}可用</span>
+          </div>
+          <div class="coupon-right-block">
+            <div class="coupon-type">{{ coupon.typeName }}</div>
+            <div class="scope">适用：{{ coupon.applicableTo }}</div>
+            <div class="meta-row">
+              <span>剩余{{ coupon.totalCount - coupon.claimedCount }}张</span>
+              <span>有效期至{{ new Date(coupon.expireTime).toLocaleDateString() }}</span>
+            </div>
+            <div v-if="Number(goods.price) >= (coupon.minAmount || 0)" class="save-tip">本商品使用可省¥{{ coupon.amount }}</div>
+          </div>
+          <div class="btn-block">
+            <el-button v-if="!claimedCouponIds.includes(coupon.id)" type="primary" size="small" @click="claimCoupon(coupon.id)">立即领取</el-button>
+            <span v-else class="claimed-text">已领取</span>
+          </div>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- 弹窗：编辑商品 -->
+    <el-dialog v-model="editDialogVisible" title="编辑商品信息" width="640px" class="common-dialog">
+      <el-form label-width="90px" class="edit-form">
+        <el-form-item label="商品标题">
+          <el-input v-model="editForm.title" placeholder="输入商品标题"/>
         </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="editForm.description" type="textarea" :rows="4" />
+        <el-form-item label="商品描述">
+          <el-input v-model="editForm.description" type="textarea" :rows="4" placeholder="详细描述商品"/>
         </el-form-item>
-        <el-form-item label="商品图片">
-          <el-upload
-              :show-file-list="false"
-              :before-upload="beforeUpload"
-              :on-change="onFileChange"
-          >
-            <el-button :loading="uploading" type="primary">从电脑选择图片</el-button>
+        <el-form-item label="商品主图">
+          <el-upload :show-file-list="false" :before-upload="beforeUpload" :on-change="onFileChange">
+            <el-button :loading="uploading" type="primary">点击上传图片（≤2M）</el-button>
           </el-upload>
-          <div v-if="editForm.imageUrl" class="image-preview">
-            <img
-                :src="editForm.imageUrl"
-                alt="预览图片"
-                class="preview-img"
-            />
+          <div v-if="editForm.imageUrl" class="img-preview-box">
+            <img :src="resolveMediaUrl(editForm.imageUrl)" alt="预览图" class="preview-img"/>
           </div>
         </el-form-item>
-        <el-form-item label="价格">
-          <el-input-number v-model="editForm.price" :min="0" :step="1" />
+        <el-form-item label="售价">
+          <el-input-number v-model="editForm.price" :min="0" step="0.01"/>
         </el-form-item>
         <el-form-item label="运费">
-          <el-input-number v-model="editForm.freight" :min="0" :step="1" />
-          <span class="form-tip">不填默认包邮</span>
+          <el-input-number v-model="editForm.freight" :min="0"/>
+          <span class="form-tip">0元为包邮</span>
         </el-form-item>
-        <el-form-item label="分类">
-          <el-select v-model="editForm.category" placeholder="请选择商品分类">
-            <el-option v-for="cat in categories" :key="cat.value" :label="cat.label" :value="cat.value" />
+        <el-form-item label="商品分类">
+          <el-select v-model="editForm.category" placeholder="选择分类">
+            <el-option v-for="cat in categories" :key="cat.value" :label="cat.label" :value="cat.value"/>
           </el-select>
         </el-form-item>
         <el-form-item label="品牌名称">
-          <el-input v-model="editForm.brandName" placeholder="请输入品牌名称" />
+          <el-input v-model="editForm.brandName"/>
         </el-form-item>
-        <el-form-item label="品牌底色">
-          <el-select v-model="editForm.brandColor" placeholder="请选择品牌标签底色">
-            <el-option v-for="color in brandColors" :key="color.value" :label="color.label" :value="color.value" />
+        <el-form-item label="品牌标签色">
+          <el-select v-model="editForm.brandColor">
+            <el-option v-for="color in brandColors" :key="color.value" :label="color.label" :value="color.value"/>
           </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
-        <span class="dialog-footer">
+        <div class="dialog-footer">
           <el-button @click="editDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="saveEdit">保存</el-button>
-        </span>
+          <el-button type="primary" @click="saveEdit">保存修改</el-button>
+        </div>
       </template>
     </el-dialog>
-
-    <el-dialog v-model="couponListDialogVisible" title="可用优惠券" width="500px" class="coupon-list-dialog" @close="closeCouponListDialog">
-      <div class="coupon-list-container">
-        <div v-if="availableCoupons.length === 0" class="empty-coupon-list">
-          <svg class="empty-coupon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-            <line x1="7" y1="7" x2="7.01" y2="7"/>
-          </svg>
-          <p>暂无可用优惠券</p>
-        </div>
-        <div v-for="coupon in availableCoupons" :key="coupon.id" class="coupon-card">
-          <div class="coupon-left">
-            <span class="coupon-amount">￥{{ coupon.amount }}</span>
-            <span v-if="coupon.minAmount && coupon.minAmount > 0" class="coupon-condition">满{{ coupon.minAmount }}可用</span>
-          </div>
-          <div class="coupon-right">
-            <div class="coupon-type">{{ coupon.typeName }}</div>
-            <div class="coupon-applicable">适用：{{ coupon.applicableTo }}</div>
-            <div class="coupon-info">
-              <span class="coupon-count">剩余 {{ coupon.totalCount - coupon.claimedCount }} 张</span>
-              <span class="coupon-expire">有效期至 {{ new Date(coupon.expireTime).toLocaleDateString() }}</span>
-            </div>
-            <div v-if="goods.price >= (coupon.minAmount || 0)" class="coupon-savings">
-              本商品使用可省：<span class="savings-amount">￥{{ coupon.amount }}</span>
-            </div>
-          </div>
-          <el-button 
-            v-if="!claimedCouponIds.includes(coupon.id)" 
-            type="primary" 
-            class="coupon-claim-btn"
-            @click="claimCoupon(coupon.id)"
-          >
-            立即领取
-          </el-button>
-          <span v-else class="coupon-claimed">已领取</span>
-        </div>
-      </div>
-    </el-dialog>
   </div>
-  <div v-else class="loading">
-    <div class="loading-spinner"></div>
-    <p>加载中...</p>
+
+  <!-- 加载占位 -->
+  <div v-else class="loading-page">
+    <div class="loading-circle"></div>
+    <p class="loading-text">商品加载中，请稍候...</p>
   </div>
 </template>
 
 <style scoped>
-.detail-page {
-  min-height: 100vh;
-  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8f0 100%);
-  padding: 40px 20px;
+/* 全局变量统一规范 */
+:root {
+  --color-main: #ff4757;
+  --color-main-light: #ffecec;
+  --color-green: #00b42a;
+  --color-green-light: #e6ffed;
+  --color-orange: #ff7d00;
+  --color-purple: #722ed1;
+  --color-gray-1: #f7f8fa;
+  --color-gray-2: #e5e6eb;
+  --color-gray-3: #c9cdd4;
+  --color-gray-4: #86909c;
+  --color-gray-5: #4e5969;
+  --color-gray-6: #1d2129;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.1);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+  --transition: all 0.24s ease;
 }
 
-.detail-container {
-  max-width: 1200px;
+* {
+  box-sizing: border-box;
+}
+.detail-page {
+  min-height: 100vh;
+  background-color: #f2f3f5;
+  padding: 24px 16px;
+}
+.container-wrap {
+  max-width: 1400px;
   margin: 0 auto;
 }
 
-.goods-main {
+/* ========== 商品主行：左图 + 右侧信息 分区隔离 ========== */
+.goods-main-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 30px;
-  margin-bottom: 40px;
+  grid-template-columns: 1fr 1.2fr;
+  /* 原 gap: 24px; 减小为 12px/8px/0px 按需改 */
+  gap: 12px !important;
+  /* 商品区与评论区的垂直间距，原 margin-bottom: 32px; */
+  margin-bottom: 16px !important;
 }
 
+/* 左侧图片卡片：纯白底色 + 深色细边框，独立区块 */
 .goods-image-card {
-  background: #fff;
-  border-radius: 20px;
+  background: #ffffff;
+  /* 直接写圆角，替换 var(--radius-lg) */
+  border-radius: 10px !important;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--color-gray-2);
   overflow: hidden;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
-}
-
-.image-wrapper {
   position: relative;
-  width: 100%;
-  padding-top: 100%;
-  background: #f8f9fa;
 }
-
+.image-wrapper {
+  width: 100%;
+  height: 100%;
+  min-height: 460px;
+  position: relative;
+}
 .goods-image {
-  position: absolute;
-  top: 0;
-  left: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  transition: var(--transition);
 }
-
+.goods-image:hover {
+  transform: scale(1.03);
+}
 .image-placeholder {
-  position: absolute;
-  top: 0;
-  left: 0;
   width: 100%;
   height: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #ccc;
+  color: var(--color-gray-3);
+  background: #fafafa;
 }
-
 .image-placeholder svg {
-  width: 80px;
-  height: 80px;
+  width: 140px;
+  height: 140px;
+  margin-bottom: 12px;
+}
+.corner-tag {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: var(--color-main);
+  color: #fff;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
 }
 
+/* 右侧信息卡片：极浅灰底色，和左侧纯白形成色差区分 */
 .goods-info-card {
-  background: #fff;
-  border-radius: 20px;
-  padding: 30px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+  background: #fcfcfd;
+  /* 直接写圆角，替换 var(--radius-lg) */
+  border-radius: 10px !important;
+  box-shadow: var(--shadow-md);
+  border: 1px solid #e8e8eb;
+  padding: 28px;
   display: flex;
   flex-direction: column;
 }
 
-.goods-header {
-  margin-bottom: 25px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid #eee;
-}
-
-.goods-title {
-  font-size: 26px;
-  font-weight: 600;
-  color: #1a1a1a;
-  margin: 0 0 15px 0;
-  line-height: 1.4;
-}
-
-.goods-description {
-  font-size: 15px;
-  color: #666;
-  line-height: 1.7;
-  margin: 0;
-}
-
-.goods-price-section {
-  background: linear-gradient(135deg, #fff5f5 0%, #fff 100%);
-  border-radius: 12px;
-  padding: 20px;
-  margin-bottom: 25px;
-}
-
-.price-row {
-  display: flex;
-  align-items: baseline;
-  margin-bottom: 12px;
-}
-
-.price-label {
-  font-size: 14px;
-  color: #999;
-  margin-right: 15px;
-}
-
-.goods-price {
-  font-size: 36px;
-  font-weight: 700;
-  color: #ff4757;
-}
-
-.price-display {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.original-price {
-  font-size: 16px;
-  color: #999;
-  text-decoration: line-through;
-}
-
-.member-tag {
-  display: inline-block;
-  font-size: 12px;
-  color: #ff1744;
-  background: linear-gradient(135deg, #ffe0e0 0%, #fff5f5 100%);
-  padding: 2px 8px;
-  border-radius: 4px;
-  margin-top: 4px;
-  width: fit-content;
-}
-
-.info-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.info-row:last-child {
-  margin-bottom: 0;
-}
-
-.info-label {
-  font-size: 14px;
-  color: #999;
-  margin-right: 15px;
-  min-width: 50px;
-}
-
-.info-value {
-  font-size: 15px;
-  color: #333;
-}
-
-.free-shipping {
-  color: #2ed573;
-  font-weight: 500;
-}
-
-.seller-section {
-  margin-bottom: 25px;
-}
-
-.seller-label {
-  font-size: 14px;
-  color: #999;
-  margin-bottom: 12px;
-}
-
-.seller-info {
+/* 卖家卡片 内部二级区分 */
+.seller-card {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.seller-avatar {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 3px solid #667eea;
-}
-
-.seller-avatar-placeholder {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  font-weight: bold;
-  border: 3px solid #667eea;
-}
-
-.seller-details {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.seller-name {
-  font-size: 16px;
-  font-weight: 500;
-  color: #333;
-}
-
-.seller-text {
-  font-size: 12px;
-  color: #999;
-}
-
-.action-section {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: auto;
-}
-
-.action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 14px 28px;
-  border-radius: 50px;
-  font-size: 15px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-  border: none;
-}
-
-.btn-icon {
-  width: 18px;
-  height: 18px;
-}
-
-.buy-btn {
-  background: linear-gradient(135deg, #ff4757 0%, #ff6b81 100%);
-  color: white;
-}
-
-.buy-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(255, 71, 87, 0.4);
-}
-
-.cart-btn {
-  background: #fff;
-  color: #333;
-  border: 2px solid #ddd !important;
-}
-
-.cart-btn:hover {
-  border-color: #667eea !important;
-  color: #667eea;
-  background: #f8f9ff;
-}
-
-.chat-btn {
-  background: #fff;
-  color: #333;
-  border: 2px solid #ddd !important;
-}
-
-.chat-btn:hover {
-  border-color: #2ed573 !important;
-  color: #2ed573;
-  background: #f0fff4;
-}
-
-.edit-btn {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-}
-
-.edit-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
-}
-
-.coupon-btn {
-  background: linear-gradient(135deg, #ffa502 0%, #ff6348 100%);
-  color: white;
-}
-
-.coupon-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(255, 165, 2, 0.4);
-}
-
-.comment-section {
-  background: #fff;
-  border-radius: 20px;
-  padding: 30px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 25px;
-  padding-bottom: 15px;
-  border-bottom: 2px solid #f0f0f0;
-}
-
-.section-title {
-  font-size: 22px;
-  font-weight: 600;
-  color: #1a1a1a;
-  margin: 0;
-}
-
-.comment-count {
-  font-size: 14px;
-  color: #999;
-  background: #f5f5f5;
-  padding: 6px 14px;
-  border-radius: 20px;
-}
-
-.empty-comments {
-  text-align: center;
-  padding: 60px 20px;
-  color: #999;
-}
-
-.empty-icon {
-  width: 60px;
-  height: 60px;
-  margin-bottom: 15px;
-  color: #ddd;
-}
-
-.empty-comments p {
-  font-size: 15px;
-  margin: 0;
-}
-
-.comment-list {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.comment-card {
-  padding: 20px;
-  background: #fafbfc;
-  border-radius: 12px;
-  border: 1px solid #f0f0f0;
-  transition: all 0.3s ease;
-}
-
-.comment-card:hover {
-  border-color: #e0e0e0;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
-}
-
-.comment-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.comment-avatar {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 2px solid #667eea;
-}
-
-.comment-avatar-placeholder {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  font-weight: bold;
-}
-
-.comment-user-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.comment-user {
-  font-weight: 500;
-  color: #333;
-  font-size: 15px;
-}
-
-.comment-time {
-  font-size: 12px;
-  color: #999;
-}
-
-.comment-content {
-  font-size: 14px;
-  color: #555;
-  line-height: 1.7;
-  margin-left: 54px;
-  margin-bottom: 12px;
-}
-
-.comment-media {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-left: 54px;
-}
-
-.media-item {
-  width: 100px;
-  height: 100px;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.comment-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  cursor: pointer;
-  transition: transform 0.3s ease;
-}
-
-.comment-image:hover {
-  transform: scale(1.05);
-}
-
-.comment-actions {
-  margin-left: 54px;
-  margin-top: 10px;
-}
-
-.reply-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: #667eea;
-  font-size: 13px;
-}
-
-.reply-icon {
-  width: 14px;
-  height: 14px;
-}
-
-.message-dialog :deep(.el-dialog) {
-  border-radius: 16px;
-}
-
-.reply-dialog :deep(.el-dialog) {
-  border-radius: 16px;
-}
-
-.coupon-dialog :deep(.el-dialog) {
-  border-radius: 16px;
-}
-
-.coupon-form {
-  padding: 10px 0;
-}
-
-.coupon-tip {
-  margin-top: 12px;
-  color: #999;
-  font-size: 13px;
-}
-
-.edit-form :deep(.el-form-item__label) {
-  font-weight: 500;
-}
-
-.form-tip {
-  margin-left: 12px;
-  color: #999;
-  font-size: 13px;
-}
-
-.image-preview {
-  margin-top: 15px;
-}
-
-.preview-img {
-  width: 120px;
-  height: 120px;
-  object-fit: cover;
-  border-radius: 8px;
-  border: 1px solid #eee;
-}
-
-.loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 60vh;
-  color: #999;
-}
-
-.loading-spinner {
-  width: 50px;
-  height: 50px;
-  border: 4px solid #f0f0f0;
-  border-top-color: #667eea;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
+  padding: 14px;
+  background: linear-gradient(135deg, #f6f7ff 0%, #f0f4ff 100%);
+  border-radius: var(--radius-md);
+  border: 1px solid #dde4ff;
   margin-bottom: 20px;
 }
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.seller-avatar-wrap {
+  flex-shrink: 0;
 }
-
-@media (max-width: 768px) {
-  .goods-main {
-    grid-template-columns: 1fr;
-  }
-
-  .goods-title {
-    font-size: 22px;
-  }
-
-  .goods-price {
-    font-size: 28px;
-  }
-
-  .action-section {
-    flex-direction: column;
-  }
-
-  .action-btn {
-    width: 100%;
-  }
+.seller-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
 }
-
-.coupon-entry {
+.seller-avatar-placeholder {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, #fff5f0 0%, #fff 100%);
-  border: 1px dashed #ff9f43;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  margin-top: 8px;
-}
-
-.coupon-entry:hover {
-  background: linear-gradient(135deg, #ffede0 0%, #fff5f0 100%);
-  border-color: #ff6b6b;
-  transform: translateX(4px);
-}
-
-.coupon-icon {
-  width: 18px;
-  height: 18px;
-  color: #ff9f43;
-}
-
-.coupon-text {
-  font-size: 14px;
-  color: #ff6b6b;
-  font-weight: 500;
-}
-
-.coupon-list-dialog :deep(.el-dialog) {
-  border-radius: 16px;
-}
-
-.coupon-list-container {
-  padding: 10px 0;
-}
-
-.empty-coupon-list {
-  text-align: center;
-  padding: 40px 20px;
-  color: #999;
-}
-
-.empty-coupon-icon {
-  width: 60px;
-  height: 60px;
-  margin-bottom: 15px;
-  color: #ddd;
-}
-
-.coupon-card {
-  display: flex;
-  align-items: center;
-  background: linear-gradient(135deg, #fff5f0 0%, #fff 100%);
-  border: 1px solid #ffe0c0;
-  border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 15px;
-  position: relative;
-  overflow: hidden;
-}
-
-.coupon-card::before {
-  content: '';
-  position: absolute;
-  left: 120px;
-  top: 0;
-  bottom: 0;
-  width: 20px;
-  background: #fff;
-}
-
-.coupon-card::after {
-  content: '';
-  position: absolute;
-  left: 110px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 20px;
-  height: 20px;
-  background: #fff;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px #ffe0c0;
-}
-
-.coupon-left {
-  width: 120px;
-  display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #ff6b6b 0%, #ff9f43 100%);
-  padding: 15px 0;
-  border-radius: 8px;
-  margin-right: 20px;
-}
-
-.coupon-amount {
-  font-size: 32px;
-  font-weight: 700;
-  color: #fff;
-  line-height: 1;
-}
-
-.coupon-condition {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.9);
-  margin-top: 4px;
-}
-
-.coupon-right {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.coupon-type {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
-  color: #333;
 }
-
-.coupon-applicable {
-  font-size: 13px;
-  color: #666;
-}
-
-.coupon-info {
-  display: flex;
-  gap: 15px;
-}
-
-.coupon-count, .coupon-expire {
-  font-size: 12px;
-  color: #999;
-}
-
-.coupon-savings {
-  font-size: 13px;
-  color: #ff6b6b;
-  margin-top: 4px;
-}
-
-.savings-amount {
+.seller-meta .seller-name {
+  font-size: 15px;
   font-weight: 600;
-  font-size: 16px;
+  color: var(--color-gray-6);
+}
+.seller-meta .seller-desc {
+  font-size: 12px;
+  color: var(--color-gray-4);
+  margin-top: 2px;
 }
 
-.coupon-claim-btn {
-  padding: 8px 20px;
-  border-radius: 20px;
-  font-size: 14px;
-  background: linear-gradient(135deg, #ff6b6b 0%, #ff9f43 100%);
-  border: none;
-  color: #fff;
-  height: auto;
-  line-height: 1;
-  min-width: auto;
+/* 标题区域分割线强化 */
+.goods-header {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 2px dashed var(--color-gray-2);
 }
-
-.coupon-claim-btn:hover {
-  background: linear-gradient(135deg, #ff5252 0%, #ff8f33 100%);
-  color: #fff;
-}
-
-.coupon-claimed {
-  padding: 8px 20px;
-  font-size: 14px;
-  color: #999;
-  background: #f5f5f5;
-  border-radius: 20px;
-  display: inline-block;
-}
-
-/* 团购样式 */
-.groupbuy-entry {
-  background: linear-gradient(135deg, #fff8e1 0%, #fff 100%);
-  border: 1px solid #ffe0b2;
-  border-radius: 12px;
-  padding: 15px;
-  margin-bottom: 15px;
-}
-
-.groupbuy-header {
+.title-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-bottom: 10px;
 }
-
-.groupbuy-badge {
-  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
-  color: white;
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.groupbuy-price {
-  font-size: 24px;
-  font-weight: 700;
-  color: #ff6b00;
-}
-
-.groupbuy-original {
-  font-size: 14px;
-  color: #999;
-  text-decoration: line-through;
-}
-
-.groupbuy-progress-bar {
-  height: 8px;
-  background: #e0e0e0;
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-
-.groupbuy-progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #ff9800, #ff5722);
-  border-radius: 4px;
-  transition: width 0.5s ease;
-}
-
-.groupbuy-status {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-}
-
-.groupbuy-success {
-  color: #4caf50;
-  font-weight: 600;
-}
-
-.groupbuy-pending {
-  color: #ff9800;
-  font-weight: 600;
-}
-
-.groupbuy-join-btn {
-  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%) !important;
-  color: white !important;
-  border: none !important;
-}
-
-.groupbuy-join-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(255, 152, 0, 0.4);
-}
-
-.groupbuy-buy-btn {
-  background: linear-gradient(135deg, #ff4757 0%, #ff6b81 100%) !important;
-  color: white !important;
-  border: none !important;
-}
-
-.groupbuy-buy-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(255, 71, 87, 0.4);
-}
-
-.groupbuy-wait-btn {
-  background: #f5f5f5 !important;
-  color: #999 !important;
-  border: none !important;
-}
-
-/* 限时折扣样式 */
-.discount-entry {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  background: linear-gradient(135deg, #fff0f0 0%, #fff 100%);
-  border: 1px solid #ffcdd2;
-  border-radius: 8px;
-  margin-top: 8px;
-}
-
-.discount-badge {
-  background: linear-gradient(135deg, #f44336 0%, #e53935 100%);
-  color: white;
-  padding: 3px 10px;
-  border-radius: 12px;
+.brand-tag {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
   font-size: 12px;
   font-weight: 600;
+  color: #fff;
   white-space: nowrap;
 }
-
-.discount-text {
+.goods-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--color-gray-6);
+  margin: 0;
+  line-height: 1.4;
+}
+.goods-desc {
   font-size: 14px;
-  color: #d32f2f;
-  font-weight: 500;
+  color: var(--color-gray-5);
+  line-height: 1.7;
+  margin: 0;
 }
 
-.discount-price {
-  color: #d32f2f !important;
+/* 价格模块加深底色，和信息卡片主体区分 */
+.price-block {
+  background: #f5f7fa;
+  border-radius: var(--radius-md);
+  border: 1px solid #e2e6ed;
+  padding: 20px;
+  margin-bottom: 20px;
 }
-
-.discount-tag {
-  background: linear-gradient(135deg, #f44336 0%, #e53935 100%);
-  color: white;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 12px;
+.price-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.price-symbol {
+  font-size: 18px;
+  color: var(--color-main);
   font-weight: 600;
+}
+.final-price {
+  font-size: 34px;
+  font-weight: 700;
+  color: #f5222d;
+  line-height: 1;
+}
+.origin-price-line {
+  font-size: 14px;
+  color: var(--color-gray-4);
+  text-decoration: line-through;
+}
+.save-badge {
+  background: var(--color-main);
+  color: #fff;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+}
+.arrive-price-tag {
+  background: #ff4757;
+  color: #fff;
+  font-size: 12px;
+  padding: 3px 10px;
   margin-left: 8px;
 }
 
-/* 满减样式 */
-.fullreduce-entry {
+/* 价格明细面板 */
+.price-detail-panel {
+  background: #ffffff;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-gray-2);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 13px;
+}
+.detail-row .label {
+  color: var(--color-gray-5);
+}
+.detail-row .val {
+  font-weight: 500;
+}
+.val.red { color: var(--color-main); }
+.val.green { color: var(--color-green); }
+.save-amount {
+  color: #ff4757 !important;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+/* 活动标签组 */
+.tag-group {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.tag {
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+}
+.tag-red {
+  background: var(--color-main-light);
+  color: var(--color-main);
+  border: 1px solid #ffc2c5;
+}
+.tag-green {
+  background: var(--color-green-light);
+  color: var(--color-green);
+  border: 1px solid #b6efc8;
+}
+
+/* 优惠券入口 */
+.coupon-entry-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border: 1px dashed #ffb870;
+  background: #fffaf5;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: var(--transition);
+  margin-bottom: 16px;
+}
+.coupon-entry-box:hover {
+  background: #fff0e0;
+  border-color: var(--color-orange);
+}
+.coupon-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--color-orange);
+  margin-right: 8px;
+}
+.coupon-entry-box .text {
+  flex: 1;
+  font-size: 14px;
+  color: #e65100;
+}
+.arrow {
+  color: var(--color-gray-4);
+}
+
+/* 地址选择器 */
+.address-select-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid var(--color-gray-2);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+.address-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--color-gray-5);
+  white-space: nowrap;
+}
+.addr-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--color-main);
+}
+.address-content {
+  flex: 1;
+}
+.address-select {
+  width: 100%;
+}
+.no-address-tip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-gray-4);
+}
+
+/* 基础信息行 */
+.base-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+.info-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.info-label {
+  color: var(--color-gray-4);
+}
+.info-val {
+  color: var(--color-gray-6);
+}
+.info-val.free {
+  color: var(--color-green);
+  font-weight: 500;
+}
+
+/* 操作按钮组 */
+.action-btn-group {
+  display: flex;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 24px;
+  border-top: 1px solid var(--color-gray-2);
+}
+.action-btn-group .el-button {
+  flex: 1;
+  height: 48px;
+  font-size: 15px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: var(--transition);
+}
+.buy-btn {
+  background: linear-gradient(135deg, #ff4757, #ff6b77) !important;
+  border: none !important;
+}
+.buy-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 14px rgba(255,71,87,0.25);
+}
+.cart-btn {
+  background: linear-gradient(135deg, #ff4757, #ff6b77) !important;
+  border: none !important;
+  color: #fff !important;
+}
+.cart-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 14px rgba(255,71,87,0.25);
+}
+.chat-btn {
+  border: 1px solid var(--color-gray-3) !important;
+  color: var(--color-gray-5);
+}
+.chat-btn:hover {
+  border-color: var(--color-main) !important;
+  color: var(--color-main);
+  transform: translateY(-2px);
+}
+.btn-icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* ========== 评论区块：独立浅蓝色底色，和上方商品区彻底区分 ========== */
+.comment-container {
+  background: #f7fbff;
+  border-radius: 12px !important;
+  box-shadow: var(--shadow-md);
+  border: 1px solid #d8e8fb;
+  padding: 24px 28px;
+}
+.comment-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #d8e8fb;
+}
+.comment-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-gray-6);
+  margin: 0;
+}
+.count-tag {
+  font-size: 13px;
+  color: var(--color-gray-4);
+  background: #e8f3ff;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+}
+
+.comment-list-wrap {
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+.comment-list-wrap::-webkit-scrollbar {
+  width: 4px;
+}
+.comment-list-wrap::-webkit-scrollbar-thumb {
+  background: var(--color-gray-3);
+  border-radius: var(--radius-full);
+}
+
+.empty-comment-box {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--color-gray-4);
+}
+.empty-svg {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 12px;
+}
+
+.comment-card {
+  padding: 16px;
+  background: #ffffff;
+  border-radius: var(--radius-md);
+  border: 1px solid #ddecfc;
+  margin-bottom: 12px;
+  transition: var(--transition);
+}
+.comment-card:hover {
+  box-shadow: var(--shadow-sm);
+}
+.comment-top {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
-  background: linear-gradient(135deg, #e8f5e9 0%, #fff 100%);
-  border: 1px solid #c8e6c9;
-  border-radius: 8px;
+  margin-bottom: 10px;
+}
+.user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.avatar-text {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+}
+.user-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.username {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-gray-6);
+}
+.time-text {
+  font-size: 11px;
+  color: var(--color-gray-4);
+}
+.comment-text {
+  font-size: 14px;
+  color: var(--color-gray-5);
+  line-height: 1.7;
+  margin-left: 46px;
+}
+.media-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 0 46px;
+}
+.media-item {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--color-gray-2);
+}
+.media-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.reply-btn-wrap {
+  margin-left: 46px;
   margin-top: 8px;
 }
+.reply-svg {
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
+}
 
-.fullreduce-badge {
-  background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
-  color: white;
-  padding: 3px 10px;
-  border-radius: 12px;
+/* 弹窗通用样式 */
+:deep(.common-dialog .el-dialog__header) {
+  padding: 20px 24px;
+}
+:deep(.common-dialog .el-dialog__body) {
+  padding: 0 24px 20px;
+}
+:deep(.common-dialog .el-dialog__footer) {
+  padding: 12px 24px 20px;
+}
+:deep(.el-dialog) {
+  border-radius: var(--radius-lg);
+}
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.tip-text {
   font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
+  color: var(--color-gray-4);
+  margin: 6px 0 0;
+}
+.img-preview-box {
+  margin-top: 10px;
+}
+.preview-img {
+  width: 120px;
+  height: auto;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-gray-2);
+}
+.form-tip {
+  font-size: 12px;
+  color: var(--color-gray-4);
+  margin-left: 8px;
 }
 
-.fullreduce-text {
-  font-size: 14px;
-  color: #2e7d32;
-  font-weight: 500;
+/* 优惠券弹窗卡片 */
+.coupon-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
+.empty-coupon {
+  text-align: center;
+  padding: 30px 0;
+  color: var(--color-gray-4);
+}
+.coupon-card-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #ffe8d6;
+  border-radius: var(--radius-md);
+  background: #fffaf5;
+}
+.coupon-left-block {
+  flex-shrink: 0;
+  text-align: center;
+  min-width: 70px;
+}
+.money {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-orange);
+}
+.limit {
+  font-size: 11px;
+  color: var(--color-gray-4);
+}
+.coupon-right-block {
+  flex: 1;
+}
+.coupon-type {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-gray-6);
+}
+.scope {
+  font-size: 12px;
+  color: var(--color-gray-4);
+  margin: 4px 0;
+}
+.meta-row {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--color-gray-4);
+}
+.save-tip {
+  font-size: 12px;
+  color: var(--color-green);
+  margin-top: 4px;
+}
+.btn-block {
+  flex-shrink: 0;
+}
+.claimed-text {
+  font-size: 13px;
+  color: var(--color-gray-4);
+}
+
+/* 加载页 */
+.loading-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--color-gray-4);
+}
+.loading-circle {
+  width: 48px;
+  height: 48px;
+  border: 3px solid var(--color-gray-2);
+  border-top-color: var(--color-main);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+.loading-text {
+  font-size: 14px;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 </style>

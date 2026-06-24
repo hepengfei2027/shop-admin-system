@@ -88,5 +88,46 @@ public class UserServiceImpl implements UserService {
     public void updateAvatar(java.lang.Long id, String avatar) {
         userMapper.updateAvatar(id, avatar);
     }
+
+    @Override
+    public void updatePassword(java.lang.Long id, String oldPassword, String newPassword) {
+        User user = userMapper.findById(id);
+        if (user == null) {
+            throw new RuntimeException("用户不存在");
+        }
+        String md5Old = DigestUtils.md5DigestAsHex(oldPassword.getBytes());
+        if (!md5Old.equals(user.getPassword())) {
+            throw new RuntimeException("原密码错误");
+        }
+        String md5New = DigestUtils.md5DigestAsHex(newPassword.getBytes());
+        userMapper.updatePassword(id, md5New);
+    }
+
+    @Override
+    public void recharge(java.lang.Long id, java.math.BigDecimal amount) {
+        if (amount == null || amount.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("充值金额必须大于0");
+        }
+        int rows = userMapper.addBalance(id, amount);
+        if (rows == 0) {
+            throw new RuntimeException("充值失败");
+        }
+    }
+
+    @Override
+    public boolean payWithBalance(java.lang.Long id, java.math.BigDecimal amount) {
+        if (amount == null || amount.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("支付金额必须大于0");
+        }
+        User user = userMapper.findById(id);
+        if (user == null) {
+            throw new RuntimeException("用户不存在");
+        }
+        if (user.getBalance() == null || user.getBalance().compareTo(amount) < 0) {
+            return false; // 余额不足
+        }
+        int rows = userMapper.deductBalance(id, amount);
+        return rows > 0;
+    }
 }
 

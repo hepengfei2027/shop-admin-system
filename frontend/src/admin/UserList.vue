@@ -1,49 +1,62 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { api } from '../api';
 import { ElMessage, ElButton, ElMessageBox, ElDialog, ElInput, ElSelect, ElOption, ElTag, ElAvatar } from 'element-plus';
 
 const userList = ref<any[]>([]);
-
 // 编辑用户相关
 const dialogVisible = ref(false);
 const currentUser = ref<any>(null);
-const editForm = ref({
-  nickname: '',
-  role: 0
-});
+const editForm = ref({ nickname: '', role: 0 });
+const searchKeyword = ref('');
 
-onMounted(() => {
-  loadUserList();
-});
+// 统计数据
+const stats = computed(() => ({
+  total: userList.value.length,
+  active: userList.value.filter(u => u.status === 0).length,
+  banned: userList.value.filter(u => u.status === 1).length,
+  admin: userList.value.filter(u => u.role === 1).length,
+  merchant: userList.value.filter(u => u.role === 2).length,
+  normalUser: userList.value.filter(u => u.role === 0).length,
+}));
+
+onMounted(() => { loadUserList(); });
 
 const loadUserList = async () => {
   try {
     const res = await api.listUsers();
     if (res.data.code === 0) {
-      userList.value = res.data.data || [];
+      let users = res.data.data || [];
+      
+      // 前端搜索过滤
+      if (searchKeyword.value.trim()) {
+        const keyword = searchKeyword.value.trim().toLowerCase();
+        users = users.filter(user => {
+          const username = String(user.username || '').toLowerCase();
+          const nickname = String(user.nickname || '').toLowerCase();
+          const userId = String(user.id || '').toLowerCase();
+          return username.includes(keyword) || 
+                 nickname.includes(keyword) || 
+                 userId.includes(keyword);
+        });
+      }
+      
+      userList.value = users;
     }
-  } catch (err) {
-    ElMessage.error('加载用户列表失败');
-  }
+  } catch (err) { ElMessage.error('加载用户列表失败'); }
 };
 
 // 封禁用户
 const banUser = async (user: any) => {
   try {
     const { value: banHours } = await ElMessageBox.prompt('请输入封禁时长（小时）', '封禁用户', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      inputPattern: /^\d+$/,
-      inputErrorMessage: '请输入有效的数字'
+      confirmButtonText: '确定', cancelButtonText: '取消',
+      inputPattern: /^\d+$/, inputErrorMessage: '请输入有效的数字'
     });
-    
     await api.updateUserStatus(user.id, 1, parseInt(banHours));
     ElMessage.success('用户已封禁');
     loadUserList();
-  } catch (err) {
-    // 用户取消操作
-  }
+  } catch (err) { /* 取消 */ }
 };
 
 // 解除封禁
@@ -52,49 +65,35 @@ const unbanUser = async (user: any) => {
     await api.updateUserStatus(user.id, 0);
     ElMessage.success('已解除封禁');
     loadUserList();
-  } catch (err) {
-    ElMessage.error('操作失败');
-  }
+  } catch (err) { ElMessage.error('操作失败'); }
 };
 
 // 编辑用户
 const editUser = (user: any) => {
   currentUser.value = user;
-  editForm.value = {
-    nickname: user.nickname || '',
-    role: user.role
-  };
+  editForm.value = { nickname: user.nickname || '', role: user.role };
   dialogVisible.value = true;
 };
 
 // 保存用户信息
 const saveUser = async () => {
-  if (!editForm.value.nickname.trim()) {
-    ElMessage.warning('请输入昵称');
-    return;
-  }
+  if (!editForm.value.nickname.trim()) { ElMessage.warning('请输入昵称'); return; }
   try {
     await api.updateUserInfo(currentUser.value.id, editForm.value.nickname, editForm.value.role);
     ElMessage.success('用户信息已更新');
     dialogVisible.value = false;
     loadUserList();
-  } catch (err) {
-    ElMessage.error('更新失败');
-  }
+  } catch (err) { ElMessage.error('更新失败'); }
 };
 
 // 删除用户
 const deleteUser = async (id: number) => {
   try {
     await ElMessageBox.confirm('确定要删除这个用户吗？', '删除用户', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning'
+      confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning'
     });
     ElMessage.info('删除功能待实现');
-  } catch (err) {
-    // 用户取消删除
-  }
+  } catch (err) { /* 取消 */ }
 };
 
 // 格式化封禁截止时间
@@ -105,157 +104,148 @@ const formatBannedUntil = (bannedUntil: string) => {
   const hours = Math.ceil(diff / (1000 * 60 * 60));
   return `剩余${hours}小时`;
 };
+
+// 格式化时间
+const formatTime = (time: string) => {
+  if (!time) return '-';
+  const date = new Date(time);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+};
+
+// 获取角色文字与标签类型 0普通用户 1管理员 2商家
+const getRoleText = (role: number) => {
+  if (role === 1) return '管理员';
+  if (role === 2) return '商家';
+  return '普通用户';
+};
+const getRoleTagType = (role: number) => {
+  if (role === 1) return 'danger';
+  if (role === 2) return 'warning';
+  return 'info';
+};
 </script>
 
 <template>
-  <div class="user-list">
-    <!-- 页面标题 -->
+  <!-- 适配父admin-content，宽度100%，无额外外边距 -->
+  <div class="user-manage-wrapper">
+    <!-- 页面头部 -->
     <div class="page-header">
       <div class="header-left">
         <span class="page-icon">👥</span>
-        <div class="page-info">
+        <div>
           <h1 class="page-title">用户管理</h1>
-          <p class="page-desc">管理平台所有注册用户</p>
+          <p class="page-desc">管理平台注册用户、商家、管理员账号</p>
         </div>
       </div>
       <div class="header-right">
-        <div class="user-summary">
-          <div class="summary-item">
-            <span class="summary-number">{{ userList.length }}</span>
-            <span class="summary-label">总用户</span>
-          </div>
-        </div>
-        <el-button type="primary" @click="loadUserList">
-          🔄 刷新
-        </el-button>
+        <el-input
+            v-model="searchKeyword"
+            placeholder="搜索用户名/昵称/ID"
+            size="small"
+            class="search-input"
+            @keyup.enter="loadUserList"
+        >
+          <template #prefix>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+          </template>
+        </el-input>
+        <el-button @click="loadUserList">🔄 刷新</el-button>
       </div>
     </div>
 
-    <!-- 快速统计 -->
-    <el-row :gutter="20" class="quick-stats">
-      <el-col :xs="12" :sm="6">
-        <div class="stat-box blue">
-          <div class="stat-icon">👤</div>
-          <div class="stat-content">
-            <div class="stat-number">{{ userList.length }}</div>
-            <div class="stat-label">注册用户</div>
-          </div>
-        </div>
-      </el-col>
-      <el-col :xs="12" :sm="6">
-        <div class="stat-box success">
-          <div class="stat-icon">✅</div>
-          <div class="stat-content">
-            <div class="stat-number">--</div>
-            <div class="stat-label">正常用户</div>
-          </div>
-        </div>
-      </el-col>
-      <el-col :xs="12" :sm="6">
-        <div class="stat-box warning">
-          <div class="stat-icon">🚫</div>
-          <div class="stat-content">
-            <div class="stat-number">--</div>
-            <div class="stat-label">封禁用户</div>
-          </div>
-        </div>
-      </el-col>
-      <el-col :xs="12" :sm="6">
-        <div class="stat-box purple">
-          <div class="stat-icon">⭐</div>
-          <div class="stat-content">
-            <div class="stat-number">--</div>
-            <div class="stat-label">管理员</div>
-          </div>
-        </div>
-      </el-col>
-    </el-row>
+    <!-- 统计卡片 填满横向 -->
+    <div class="stats-grid">
+      <div class="stat-item">
+        <div class="stat-num">{{ stats.total }}</div>
+        <div class="stat-label">总账号</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">{{ stats.normalUser }}</div>
+        <div class="stat-label">普通用户</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">{{ stats.merchant }}</div>
+        <div class="stat-label">商家</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">{{ stats.admin }}</div>
+        <div class="stat-label">管理员</div>
+      </div>
+    </div>
 
-    <!-- 用户列表 -->
-    <el-card class="table-card">
-      <el-table 
-        :data="userList" 
-        style="width: 100%" 
-        stripe
-      >
-        <el-table-column label="用户信息" width="280">
-          <template #default="scope">
+    <!-- 用户表格 100%填充父容器 -->
+    <div class="table-container">
+      <el-table :data="userList" border size="default" style="width:100%">
+        <el-table-column label="用户信息" min-width="300">
+          <template #default="{ row }">
             <div class="user-cell">
-              <el-avatar :size="48" :src="scope.row.avatar" class="user-avatar">
-                {{ (scope.row.nickname || scope.row.username || 'U').charAt(0).toUpperCase() }}
-              </el-avatar>
-              <div class="user-details">
-                <div class="user-name">{{ scope.row.nickname || scope.row.username }}</div>
-                <div class="user-username">@{{ scope.row.username }}</div>
-                <div class="user-id">ID: {{ scope.row.id }}</div>
+              <el-avatar :src="row.avatar" size="44" class="user-avatar" />
+              <div class="user-info">
+                <div class="user-name">{{ row.nickname }}</div>
+                <div class="user-meta">ID:{{ row.id }} | {{ row.username }}</div>
               </div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="角色" width="120">
-          <template #default="scope">
-            <el-tag :type="scope.row.role === 1 ? 'danger' : 'info'" size="small">
-              {{ scope.row.role === 1 ? '管理员' : '普通用户' }}
+        <el-table-column label="角色" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag :type="getRoleTagType(row.role)" size="default">
+              {{ getRoleText(row.role) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="160">
-          <template #default="scope">
+        <el-table-column label="状态" width="150" align="center">
+          <template #default="{ row }">
             <div class="status-cell">
-              <el-tag :type="scope.row.status === 0 ? 'success' : 'danger'" size="small">
-                {{ scope.row.status === 0 ? '正常' : '已封禁' }}
+              <el-tag :type="row.status === 0 ? 'success' : 'danger'" size="default">
+                {{ row.status === 0 ? '正常' : '封禁' }}
               </el-tag>
-              <span v-if="scope.row.status === 1 && scope.row.bannedUntil" class="ban-time">
-                {{ formatBannedUntil(scope.row.bannedUntil) }}
+              <span v-if="row.status === 1" class="ban-time">
+                {{ formatBannedUntil(row.bannedUntil) }}
               </span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right">
-          <template #default="scope">
-            <el-button 
-              v-if="scope.row.status === 0" 
-              type="danger" 
-              size="small" 
-              @click="banUser(scope.row)"
-            >
-              封禁
-            </el-button>
-            <el-button 
-              v-else 
-              type="success" 
-              size="small" 
-              @click="unbanUser(scope.row)"
-            >
-              解封
-            </el-button>
-            <el-button type="primary" size="small" @click="editUser(scope.row)">
-              编辑
-            </el-button>
-            <el-button type="info" size="small" @click="deleteUser(scope.row.id)">
-              删除
-            </el-button>
+        <el-table-column label="注册时间" width="180" align="center">
+          <template #default="{ row }">
+            <span class="time-text">{{ row.createTime ? formatTime(row.createTime) : '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="280" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button @click="editUser(row)">编辑</el-button>
+            <el-button v-if="row.status === 0" type="warning" @click="banUser(row)">封禁</el-button>
+            <el-button v-else type="success" @click="unbanUser(row)">解封</el-button>
+            <el-button type="danger" @click="deleteUser(row.id)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
+    </div>
 
-    <!-- 编辑用户对话框 -->
-    <el-dialog v-model="dialogVisible" title="编辑用户信息" width="480px">
-      <el-form :model="editForm" label-width="80px">
-        <el-form-item label="用户名">
-          <el-input v-model="currentUser.username" disabled />
-        </el-form-item>
-        <el-form-item label="昵称">
+    <!-- 编辑弹窗 -->
+    <el-dialog v-model="dialogVisible" title="编辑账号信息" width="560px" :show-close="false">
+      <div class="edit-form">
+        <div class="form-item">
+          <label>昵称</label>
           <el-input v-model="editForm.nickname" placeholder="请输入昵称" />
-        </el-form-item>
-        <el-form-item label="角色">
+        </div>
+        <div class="form-item">
+          <label>角色</label>
           <el-select v-model="editForm.role" placeholder="请选择角色">
-            <el-option label="普通用户" :value="0" />
-            <el-option label="管理员" :value="1" />
+            <el-option :value="0" label="普通用户" />
+            <el-option :value="1" label="管理员" />
+            <el-option :value="2" label="商家" />
           </el-select>
-        </el-form-item>
-      </el-form>
+        </div>
+      </div>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" @click="saveUser">保存</el-button>
@@ -265,175 +255,164 @@ const formatBannedUntil = (bannedUntil: string) => {
 </template>
 
 <style scoped>
-.user-list {
-  padding: 0;
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* 关键：宽度100%继承父admin-content，无额外内外边距，填满父区域 */
+.user-manage-wrapper {
+  width: 100%;
+  height: 100%;
+  color: #333;
 }
 
-/* 页面标题 */
+/* 页面头部 */
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 24px;
-}
-
-.header-left {
-  display: flex;
   align-items: center;
-  gap: 16px;
-}
-
-.page-icon {
-  font-size: 40px;
-}
-
-.page-title {
-  font-size: 24px;
-  font-weight: 700;
-  color: #1f2937;
-  margin: 0 0 4px 0;
-}
-
-.page-desc {
-  font-size: 14px;
-  color: #6b7280;
-  margin: 0;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.user-summary {
-  display: flex;
-  gap: 20px;
-  background: white;
-  padding: 12px 24px;
-  border-radius: 12px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-}
-
-.summary-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.summary-number {
-  font-size: 24px;
-  font-weight: 700;
-  color: #1f2937;
-}
-
-.summary-label {
-  font-size: 13px;
-  color: #6b7280;
-  margin-top: 2px;
-}
-
-/* 快速统计 */
-.quick-stats {
-  margin-bottom: 24px;
-}
-
-.stat-box {
-  background: white;
-  border-radius: 12px;
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
   margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #eee;
 }
-
-.stat-box.blue {
-  border-left: 4px solid #3b82f6;
-}
-
-.stat-box.success {
-  border-left: 4px solid #10b981;
-}
-
-.stat-box.warning {
-  border-left: 4px solid #f59e0b;
-}
-
-.stat-box.purple {
-  border-left: 4px solid #8b5cf6;
-}
-
-.stat-icon {
-  font-size: 36px;
-}
-
-.stat-content {
-  flex: 1;
-}
-
-.stat-number {
-  font-size: 28px;
-  font-weight: 700;
-  color: #1f2937;
-  margin-bottom: 4px;
-}
-
-.stat-label {
-  font-size: 13px;
-  color: #6b7280;
-}
-
-/* 表格卡片 */
-.table-card {
-  border-radius: 16px;
-  border: none;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
-}
-
-/* 用户单元格 */
-.user-cell {
+.header-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-
-.user-avatar {
-  border: 2px solid #f3f4f6;
-}
-
-.user-details {
-  flex: 1;
-  min-width: 0;
-}
-
-.user-name {
-  font-size: 15px;
+.page-icon { font-size: 28px; }
+.page-title {
+  font-size: 22px;
   font-weight: 600;
-  color: #1f2937;
-  margin-bottom: 2px;
+}
+.page-desc {
+  font-size: 14px;
+  color: #666;
+  margin-top: 3px;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.search-input {
+  width: 240px;
+}
+:deep(.el-button) { border-radius: 0; }
+
+/* 统计网格自动均分填满整行 */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.stat-item {
+  background: #fff;
+  border: 1px solid #eee;
+  padding: 20px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-radius: 0;
+}
+.stat-num {
+  font-size: 28px;
+  font-weight: 600;
+  color: #222;
+}
+.stat-label {
+  font-size: 14px;
+  color: #666;
+  margin-top: 6px;
 }
 
-.user-username {
-  font-size: 12px;
-  color: #6b7280;
-  margin-bottom: 2px;
+/* 表格容器100%宽填满父盒子 */
+.table-container {
+  width: 100%;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 0;
+}
+:deep(.el-table) {
+  --el-table-header-text-color: #333;
+  --el-table-row-hover-bg-color: #fafafa;
+}
+:deep(.el-table__header-wrapper) { border-bottom: 1px solid #eee; }
+:deep(.el-table th),
+:deep(.el-table td) {
+  padding: 12px 14px;
+}
+:deep(.el-table--border) { border: none; }
+:deep(.el-table--border::after),
+:deep(.el-table--border::before) { display: none; }
+
+/* 用户信息单元格 */
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.user-avatar {
+  border-radius: 0;
+  border: 1px solid #eee;
+}
+.user-info { line-height: 1.4; }
+.user-name {
+  font-size: 16px;
+  font-weight: 500;
+}
+.user-meta {
+  font-size: 14px;
+  color: #666;
 }
 
-.user-id {
-  font-size: 12px;
-  color: #9ca3af;
-}
-
+/* 状态行 */
 .status-cell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
+  align-items: center;
 }
-
 .ban-time {
-  font-size: 12px;
-  color: #f59e0b;
+  font-size: 13px;
+  color: #d97706;
+}
+:deep(.el-tag) { border-radius: 0; }
+
+/* 弹窗表单 */
+.edit-form {
+  padding: 20px 0;
+}
+.form-item {
+  margin-bottom: 20px;
+}
+.form-item label {
+  display: block;
+  font-size: 16px;
+  margin-bottom: 8px;
+  color: #333;
+}
+:deep(.el-input__inner),
+:deep(.el-select__wrapper) {
+  border-radius: 0;
+  height: 40px;
+  font-size: 15px;
+}
+:deep(.el-dialog) {
+  border-radius: 0;
+  box-shadow: none;
+  border: 1px solid #eee;
+}
+:deep(.el-dialog__header) {
+  border-bottom: 1px solid #eee;
+  padding: 14px 20px;
+}
+:deep(.el-dialog__title) {
+  font-size: 18px;
+  font-weight: 500;
+}
+:deep(.el-dialog__footer) {
+  border-top: 1px solid #eee;
+  padding: 14px 20px;
+  text-align: right;
 }
 </style>

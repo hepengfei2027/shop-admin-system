@@ -26,6 +26,8 @@ public interface OrderService {
 
     void payOrder(java.lang.Long orderId, java.lang.Long buyerId);
 
+    void payOrderV2(java.lang.Long orderId, java.lang.Long buyerId, String paymentMethod);
+
     void cancelOrder(java.lang.Long orderId, java.lang.Long userId);
 
     void shipOrder(java.lang.Long orderId, java.lang.Long sellerId);

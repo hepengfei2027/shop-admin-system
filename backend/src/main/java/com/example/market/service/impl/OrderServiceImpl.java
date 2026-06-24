@@ -18,6 +18,7 @@ import com.example.market.mapper.UserCouponMapper;
 import com.example.market.mapper.UserMapper;
 import com.example.market.service.GoodsService;
 import com.example.market.service.OrderService;
+import com.example.market.service.UserService;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 
@@ -55,6 +56,9 @@ public class OrderServiceImpl implements OrderService {
 
     @Resource
     private PromotionDiscountMapper promotionDiscountMapper;
+
+    @Resource
+    private UserService userService;
 
     @Override
     public Order createOrder(java.lang.Long goodsId, java.lang.Long buyerId, java.lang.Long addressId, Integer quantity, java.lang.Long couponId,
@@ -203,6 +207,11 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public void payOrder(java.lang.Long orderId, java.lang.Long buyerId) {
+        payOrderV2(orderId, buyerId, "wechat");
+    }
+
+    @Override
+    public void payOrderV2(java.lang.Long orderId, java.lang.Long buyerId, String paymentMethod) {
         Order order = orderMapper.findById(orderId);
         if (order == null) {
             throw new RuntimeException("订单不存在");
@@ -213,6 +222,18 @@ public class OrderServiceImpl implements OrderService {
         if (order.getStatus() != 0) {
             throw new RuntimeException("订单状态不正确，无法付款");
         }
+
+        // 余额支付：先扣除余额
+        if ("balance".equals(paymentMethod)) {
+            boolean ok = userService.payWithBalance(buyerId, order.getAmount());
+            if (!ok) {
+                throw new RuntimeException("余额不足");
+            }
+        }
+
+        order.setPaymentMethod(paymentMethod);
+        orderMapper.updatePaymentMethod(orderId, paymentMethod);
+
         orderMapper.updateStatus(orderId, 1);
 
         // 如果是团购订单，设置groupStatus为0（等待拼团）
@@ -256,6 +277,9 @@ public class OrderServiceImpl implements OrderService {
         }
         if (order.getStatus() != 1) {
             throw new RuntimeException("订单状态不正确，无法发货");
+        }
+        if (order.getAfterSaleStatus() != null && order.getAfterSaleStatus() != 0) {
+            throw new RuntimeException("该订单有售后申请处理中，无法发货");
         }
         orderMapper.updateStatus(orderId, 2);
     }
@@ -347,7 +371,7 @@ public class OrderServiceImpl implements OrderService {
         BeanUtils.copyProperties(order, dto);
 
         // 设置订单状态文本
-        String[] statusTexts = {"待付款", "待发货", "待收货", "已完成", "已取消"};
+        String[] statusTexts = {"待付款", "待发货", "待收货", "已完成", "已取消", "退货中"};
         dto.setStatusText(order.getStatus() != null && order.getStatus() < statusTexts.length ?
                 statusTexts[order.getStatus()] : "未知状态");
 
@@ -442,7 +466,20 @@ public class OrderServiceImpl implements OrderService {
         if (order.getAfterSaleStatus() != 1) {
             throw new RuntimeException("售后状态不正确，无法同意退货");
         }
-        orderMapper.updateAfterSaleStatus(orderId, 2);
+
+        if ("balance".equals(order.getPaymentMethod())) {
+            userService.recharge(order.getBuyerId(), order.getAmount());
+        }
+
+        if (order.getStatus() == 1) {
+            // 待发货订单直接关闭并退款成功
+            orderMapper.updateStatus(orderId, 4);
+            orderMapper.updateAfterSaleStatus(orderId, 4);
+        } else {
+            // 待收货订单进入退货流程
+            orderMapper.updateStatus(orderId, 5);
+            orderMapper.updateAfterSaleStatus(orderId, 2);
+        }
     }
 
     @Override
@@ -487,8 +524,9 @@ public class OrderServiceImpl implements OrderService {
         if (order.getAfterSaleStatus() != 3) {
             throw new RuntimeException("售后状态不正确，无法确认收货");
         }
+
         orderMapper.updateAfterSaleStatus(orderId, 4);
-        orderMapper.updateStatus(orderId, 3);
+        orderMapper.updateStatus(orderId, 4);
         goodsService.increaseStock(order.getGoodsId(), 1);
     }
 
@@ -572,6 +610,7 @@ public class OrderServiceImpl implements OrderService {
             case 2: return "待收货";
             case 3: return "已完成";
             case 4: return "已取消";
+            case 5: return "退货中";
             default: return "未知";
         }
     }

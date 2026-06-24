@@ -28,12 +28,11 @@ const logout = () => {
 };
 
 const navItems = [
-  { path: '/admin/home', label: '数据概览', icon: '📊' },
-  { path: '/admin/pending', label: '待审核商品', icon: '📋' },
-  { path: '/admin/goods', label: '商品管理', icon: '🏪' },
-  { path: '/admin/users', label: '用户管理', icon: '👥' },
-  { path: '/admin/orders', label: '订单管理', icon: '📦' },
-  { path: '/admin/statistics', label: '营收统计', icon: '💰' }
+  { path: '/admin/home', label: '数据概览', icon: '' },
+  { path: '/admin/pending', label: '待审核商品', icon: '' },
+  { path: '/admin/goods', label: '商品管理', icon: '' },
+  { path: '/admin/users', label: '用户管理', icon: '' },
+  { path: '/admin/orders', label: '订单管理', icon: '' }
 ];
 
 const activePath = computed(() => route.path);
@@ -45,7 +44,7 @@ const activePath = computed(() => route.path);
     <div class="admin-header">
       <div class="header-left">
         <div class="logo">
-          <span class="logo-icon">🛒</span>
+          <span class="logo-icon"></span>
           <span class="logo-text">电商管理后台</span>
         </div>
       </div>
@@ -62,31 +61,31 @@ const activePath = computed(() => route.path);
         </el-button>
       </div>
     </div>
-    
+
     <!-- 主体区域 -->
     <div class="admin-body">
       <!-- 左侧导航菜单 -->
       <div class="admin-sidebar">
         <el-menu
-          :default-active="activePath"
-          class="admin-menu"
-          router
-          background-color="#1f2937"
-          text-color="#9ca3af"
-          active-text-color="#ffffff"
+            :default-active="activePath"
+            class="admin-menu"
+            router
+            background-color="#222222"
+            text-color="#cccccc"
+            active-text-color="#ffffff"
         >
           <el-menu-item
-            v-for="item in navItems"
-            :key="item.path"
-            :index="item.path"
-            class="menu-item"
+              v-for="item in navItems"
+              :key="item.path"
+              :index="item.path"
+              class="menu-item"
           >
             <span class="menu-icon">{{ item.icon }}</span>
             <span>{{ item.label }}</span>
           </el-menu-item>
         </el-menu>
       </div>
-      
+
       <!-- 右侧内容区域 -->
       <div class="admin-content">
         <router-view />
@@ -96,24 +95,26 @@ const activePath = computed(() => route.path);
 </template>
 
 <style scoped>
+/* 根容器铺满全屏 */
 .admin-layout {
   min-height: 100vh;
-  background-color: #f3f4f6;
   display: flex;
   flex-direction: column;
 }
 
-/* 顶部导航栏 */
+/* 顶部栏固定吸附顶部，滚动永远可见 */
 .admin-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #333333;
   color: white;
   padding: 0 32px;
   height: 64px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: none;
   z-index: 100;
+  position: sticky;
+  top: 0;
 }
 
 .header-left {
@@ -147,14 +148,15 @@ const activePath = computed(() => route.path);
   display: flex;
   align-items: center;
   gap: 12px;
-  background: rgba(255, 255, 255, 0.15);
+  background: #444444;
   padding: 8px 16px;
-  border-radius: 30px;
-  backdrop-filter: blur(10px);
+  border-radius: 0;
+  backdrop-filter: none;
 }
 
 .user-avatar {
-  border: 2px solid rgba(255, 255, 255, 0.3);
+  border: 2px solid #666666;
+  border-radius: 0;
 }
 
 .user-name {
@@ -163,32 +165,31 @@ const activePath = computed(() => route.path);
 }
 
 .logout-btn {
-  background: rgba(255, 255, 255, 0.2);
+  background: #555555;
   border: none;
   color: white;
   padding: 8px 20px;
-  border-radius: 6px;
+  border-radius: 0;
   font-weight: 500;
-  transition: all 0.3s;
+  transition: background 0.2s;
 }
 
 .logout-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: #777777;
 }
 
-/* 主体区域 */
+/* 主体使用grid布局，左右两栏高度自动等高，侧边深色背景自动铺满底部，无断裂 */
 .admin-body {
   flex: 1;
-  display: flex;
-  overflow: hidden;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: calc(100vh - 64px);
 }
 
-/* 左侧导航菜单 */
+/* 左侧侧边栏 移除fixed，等高拉伸，内部滚动 */
 .admin-sidebar {
-  width: 240px;
-  background-color: #1f2937;
-  border-right: 1px solid #374151;
-  height: calc(100vh - 64px);
+  background-color: #222222;
+  border-right: 1px solid #444444;
   overflow-y: auto;
 }
 
@@ -197,31 +198,31 @@ const activePath = computed(() => route.path);
 }
 
 .admin-sidebar::-webkit-scrollbar-track {
-  background: #1f2937;
+  background: #222222;
 }
 
 .admin-sidebar::-webkit-scrollbar-thumb {
-  background: #374151;
-  border-radius: 3px;
+  background: #444444;
+  border-radius: 0;
 }
 
 .admin-menu {
   border-right: none;
-  height: 100%;
+  min-height: 100%;
 }
 
 .menu-item {
-  margin: 4px 12px;
-  border-radius: 8px;
-  transition: all 0.3s;
+  margin: 4px 0;
+  border-radius: 0;
+  transition: background 0.2s;
 }
 
 .menu-item:hover {
-  background-color: #374151;
+  background-color: #333333;
 }
 
 .menu-item.is-active {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #555555;
 }
 
 .menu-icon {
@@ -229,12 +230,11 @@ const activePath = computed(() => route.path);
   font-size: 18px;
 }
 
-/* 右侧内容区域 */
+/* 右侧内容区域独立滚动 */
 .admin-content {
-  flex: 1;
   padding: 24px;
   overflow-y: auto;
-  background-color: #f3f4f6;
+  background-color: #ffffff;
 }
 
 .admin-content::-webkit-scrollbar {
@@ -242,24 +242,24 @@ const activePath = computed(() => route.path);
 }
 
 .admin-content::-webkit-scrollbar-track {
-  background: #f3f4f6;
+  background: #ffffff;
 }
 
 .admin-content::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 4px;
+  background: #dddddd;
+  border-radius: 0;
 }
 
-/* 身份标签样式 */
+/* 身份标签样式 - 直角矩形 */
 .user-role-badge {
   padding: 4px 10px;
-  border-radius: 4px;
+  border-radius: 0;
   font-size: 12px;
   font-weight: 600;
   color: white;
 }
 
 .role-1 {
-  background-color: #ef4444;
+  background-color: #dd3333;
 }
 </style>

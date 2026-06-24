@@ -21,5 +21,6 @@ public class User {
     private Integer memberLevel = 1; // 会员等级 1-6
     private Integer experience = 0; // 经验值
     private Double discount = 1.0; // 会员折扣 1.0 = 100%
+    private java.math.BigDecimal balance = java.math.BigDecimal.ZERO; // 账户余额
 }
 

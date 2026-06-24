@@ -36,6 +36,8 @@ public class Order {
     private Long addressId;
     private Integer quantity;
 
+    private String paymentMethod = "wechat";
+
     // 商品单价和运费
     private BigDecimal goodsPrice;    // 商品单价（下单时的价格）
     private BigDecimal freight;       // 运费

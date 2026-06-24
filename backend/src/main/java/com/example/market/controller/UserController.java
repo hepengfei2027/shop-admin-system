@@ -71,5 +71,32 @@ public class UserController {
         userService.updateAvatar(id, avatar);
         return Result.ok(null);
     }
+
+    @PostMapping("/{id}/password")
+    public Result<Void> updatePassword(@PathVariable Long id, @RequestParam String oldPassword, @RequestParam String newPassword) {
+        try {
+            userService.updatePassword(id, oldPassword, newPassword);
+            return Result.ok(null);
+        } catch (RuntimeException e) {
+            return Result.fail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/{id}/recharge")
+    public Result<Void> recharge(@PathVariable Long id, @RequestParam java.math.BigDecimal amount) {
+        try {
+            userService.recharge(id, amount);
+            return Result.ok(null);
+        } catch (RuntimeException e) {
+            return Result.fail(e.getMessage());
+        }
+    }
+
+    @GetMapping("/{id}/balance")
+    public Result<java.math.BigDecimal> getBalance(@PathVariable Long id) {
+        User u = userService.findById(id);
+        if (u == null) return Result.fail("用户不存在");
+        return Result.ok(u.getBalance() == null ? java.math.BigDecimal.ZERO : u.getBalance());
+    }
 }
 

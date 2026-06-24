@@ -15,6 +15,9 @@ export const api = {
   listGoods() {
     return instance.get('/goods/list');
   },
+  listAllGoods() {
+    return instance.get('/goods/all');
+  },
   searchGoods(keyword: string) {
     return instance.get('/goods/search', { params: { keyword } });
   },
@@ -111,6 +114,20 @@ export const api = {
   updateUserInfo(id: number, nickname: string, role: number, phone?: string) {
     return instance.post(`/user/update/${id}`, null, { params: { nickname, role, phone } });
   },
+  updatePassword(userId: number, oldPassword: string, newPassword: string) {
+    return instance.post(`/user/${userId}/password`, null, { params: { oldPassword, newPassword } });
+  },
+  // 余额相关
+  getUserBalance(userId: number) {
+    return instance.get(`/user/${userId}/balance`);
+  },
+  recharge(userId: number, amount: number) {
+    return instance.post(`/user/${userId}/recharge`, null, { params: { amount } });
+  },
+  // 通过用户名重置密码
+  resetPasswordByAccount(username: string, newPassword: string) {
+    return instance.post('/user/resetPasswordByAccount', null, { params: { username, newPassword } });
+  },
   getAddresses(userId: number) {
     return instance.get('/address/list', { params: { userId } });
   },
@@ -146,6 +163,11 @@ export const api = {
   },
   payOrderV2(orderId: number, buyerId: number) {
     return instance.post(`/order/${orderId}/pay`, null, { params: { buyerId } });
+  },
+
+  // 带支付方式的支付接口（支持余额）
+  payOrderWithMethod(orderId: number, buyerId: number, paymentMethod: string) {
+    return instance.post(`/order/${orderId}/payV2`, null, { params: { buyerId, paymentMethod } });
   },
   shipOrder(orderId: number, sellerId: number) {
     return instance.post(`/order/${orderId}/ship`, null, { params: { sellerId } });
@@ -260,16 +282,16 @@ export const api = {
     return instance.get(`/analytics/seller/${sellerId}`);
   },
   getPlatformTrend() {
-    return instance.get('/analytics/platform/trend');
+    return instance.get('/statistics/platform/trend');
   },
   getTopGoods() {
-    return instance.get('/analytics/platform/top-goods');
+    return instance.get('/statistics/platform/top-goods');
   },
   getUserAnalysis() {
-    return instance.get('/analytics/platform/user-analysis');
+    return instance.get('/statistics/platform/user-analysis');
   },
   getOrderAnalysis() {
-    return instance.get('/analytics/platform/order-analysis');
+    return instance.get('/statistics/platform/order-analysis');
   },
   
   // ==================== 营销活动 API ====================

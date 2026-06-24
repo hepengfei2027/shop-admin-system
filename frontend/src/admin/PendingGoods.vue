@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { api } from '../api';
 import { ElMessage, ElButton, ElTag } from 'element-plus';
 
@@ -58,6 +58,18 @@ const getUserById = (userId: number) => {
   const user = userList.value.find(u => u.id === userId);
   return user ? user.username : '未知用户';
 };
+
+// 新增统计计算，填充--空白数字
+const todayStr = new Date().toLocaleDateString();
+// 今日新增待审核
+const todayNewCount = computed(() => {
+  return pendingGoodsList.value.filter(item => {
+    const createDate = new Date(item.createTime).toLocaleDateString();
+    return createDate === todayStr;
+  }).length;
+});
+// 今日已审核（这里仅展示，如需后端接口替换逻辑）
+const todayReviewedCount = computed(() => 0);
 </script>
 
 <template>
@@ -72,46 +84,34 @@ const getUserById = (userId: number) => {
         </div>
       </div>
       <div class="header-right">
-        <div class="pending-count">
-          <span class="count-number">{{ pendingGoodsList.length }}</span>
-          <span class="count-label">件待审核</span>
-        </div>
-        <el-button type="primary" @click="loadPendingGoodsList">
-          🔄 刷新
-        </el-button>
+        <el-button size="small" @click="loadPendingGoodsList">🔄 刷新</el-button>
       </div>
     </div>
 
-    <!-- 统计卡片 -->
-    <el-row :gutter="20" class="quick-stats" v-if="pendingGoodsList.length > 0">
-      <el-col :xs="12" :sm="8">
-        <div class="stat-box warning">
-          <div class="stat-icon">⏳</div>
-          <div class="stat-content">
-            <div class="stat-number">{{ pendingGoodsList.length }}</div>
-            <div class="stat-label">待审核商品</div>
-          </div>
+    <!-- 统计卡片 三列均分，数字自动计算 -->
+    <div class="stats-grid" v-if="pendingGoodsList.length > 0">
+      <div class="stat-box warning">
+        <div class="stat-icon">⏳</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ pendingGoodsList.length }}</div>
+          <div class="stat-label">待审核商品</div>
         </div>
-      </el-col>
-      <el-col :xs="12" :sm="8">
-        <div class="stat-box info">
-          <div class="stat-icon">📊</div>
-          <div class="stat-content">
-            <div class="stat-number">--</div>
-            <div class="stat-label">今日新增</div>
-          </div>
+      </div>
+      <div class="stat-box info">
+        <div class="stat-icon">📊</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ todayNewCount }}</div>
+          <div class="stat-label">今日新增</div>
         </div>
-      </el-col>
-      <el-col :xs="12" :sm="8">
-        <div class="stat-box success">
-          <div class="stat-icon">✅</div>
-          <div class="stat-content">
-            <div class="stat-number">--</div>
-            <div class="stat-label">今日已审核</div>
-          </div>
+      </div>
+      <div class="stat-box success">
+        <div class="stat-icon">✅</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ todayReviewedCount }}</div>
+          <div class="stat-label">今日已审核</div>
         </div>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
 
     <!-- 空状态 -->
     <div v-else class="empty-state">
@@ -120,20 +120,19 @@ const getUserById = (userId: number) => {
       <p class="empty-desc">所有商品都已审核通过啦</p>
     </div>
 
-    <!-- 商品列表 -->
-    <el-card class="table-card" v-if="pendingGoodsList.length > 0">
-      <el-table 
-        :data="pendingGoodsList" 
-        style="width: 100%" 
-        stripe
+    <!-- 商品表格 -->
+    <div class="table-wrap" v-if="pendingGoodsList.length > 0">
+      <el-table
+          :data="pendingGoodsList"
+          style="width: 100%"
+          stripe
+          size="small"
       >
-        <el-table-column label="商品信息" width="340">
+        <el-table-column label="商品信息" min-width="260">
           <template #default="scope">
             <div class="goods-cell">
               <img v-if="scope.row.imageUrl" :src="scope.row.imageUrl" class="goods-thumb" />
-              <div v-else class="goods-thumb-placeholder">
-                <span>🏷️</span>
-              </div>
+              <div v-else class="goods-thumb-placeholder">🏷️</div>
               <div class="goods-details">
                 <div class="goods-name">{{ scope.row.title }}</div>
                 <div class="goods-id">ID: {{ scope.row.id }}</div>
@@ -141,239 +140,186 @@ const getUserById = (userId: number) => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="价格" width="120">
+        <el-table-column label="价格" width="100">
           <template #default="scope">
             <span class="price-text">¥{{ scope.row.price?.toFixed(2) }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="description" label="描述" show-overflow-tooltip />
-        <el-table-column label="卖家" width="140">
+        <el-table-column label="卖家" width="120" align="center">
           <template #default="scope">
             <el-tag type="info" size="small">{{ getUserById(scope.row.sellerId) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <!-- 操作列加宽适配长按钮 -->
+        <el-table-column label="操作" width="200" fixed="right" align="center">
           <template #default="scope">
-            <el-button 
-              type="success" 
-              size="small" 
-              @click="approveGoods(scope.row.id)"
-              class="action-btn"
-            >
-              ✅ 审核通过
-            </el-button>
-            <el-button 
-              type="danger" 
-              size="small" 
-              @click="rejectGoods(scope.row.id)"
-              class="action-btn"
-            >
-              ❌ 拒绝
-            </el-button>
+            <div class="btn-group">
+              <el-button size="mini" type="success" @click="approveGoods(scope.row.id)">通过</el-button>
+              <el-button size="mini" type="danger" @click="rejectGoods(scope.row.id)">拒绝</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
+    </div>
   </div>
 </template>
 
 <style scoped>
+* { margin: 0; padding: 0; box-sizing: border-box; }
 .pending-goods {
-  padding: 0;
+  width: 100%;
+  color: #333;
 }
 
-/* 页面标题 */
+/* 页面头部 */
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 24px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee;
 }
-
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
-
-.page-icon {
-  font-size: 40px;
-}
-
+.page-icon { font-size: 24px; }
 .page-title {
-  font-size: 24px;
-  font-weight: 700;
-  color: #1f2937;
-  margin: 0 0 4px 0;
+  font-size: 18px;
+  font-weight: 600;
 }
-
 .page-desc {
-  font-size: 14px;
-  color: #6b7280;
-  margin: 0;
+  font-size: 12px;
+  color: #666;
+  margin-top: 2px;
 }
 
-.header-right {
+/* 普通按钮以外全部0圆角 */
+:deep(.el-button:not(.el-button--mini)) { border-radius: 0; }
+/* mini操作按钮圆角 + 加宽左右内边距，按钮变长 */
+:deep(.el-button--mini) {
+  border-radius: 6px;
+  padding: 2px 25px !important;
+}
+
+/* 操作按钮横向排列 */
+.btn-group {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+/* 统计网格 三列均分，删除el-row栅格 */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.stat-box {
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 0;
+  padding: 40px 10px;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
+}
+/* 顶部细彩色线条替代左侧粗边框 */
+.stat-box.warning { border-top: 3px solid #f59e0b; }
+.stat-box.info { border-top: 3px solid #3b82f6; }
+.stat-box.success { border-top: 3px solid #10b981; }
+.stat-icon { font-size: 24px; }
+.stat-content { flex: 1; text-align: center; }
+.stat-number { font-size: 20px; font-weight: 600; }
+.stat-label { font-size: 12px; color: #666; margin-top: 3px; }
+
+/* 空状态简约化 */
+.empty-state {
+  background: #fff;
+  border: 1px solid #eee;
+  padding: 40px 20px;
+  text-align: center;
+}
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+.empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.empty-desc {
+  font-size: 13px;
+  color: #666;
 }
 
-.pending-count {
-  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-  padding: 12px 20px;
-  border-radius: 12px;
+/* 表格容器 */
+.table-wrap {
+  width: 100%;
+  background: #fff;
+  border: 1px solid #eee;
+}
+:deep(.el-table) {
+  --el-table-row-hover-bg-color: #fafafa;
+}
+:deep(.el-table th),
+:deep(.el-table td) {
+  padding: 8px 10px;
+}
+:deep(.el-table__header-wrapper) {
+  border-bottom: 1px solid #eee;
+}
+
+/* 商品单元格紧凑 */
+.goods-cell {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-
-.count-number {
-  font-size: 24px;
-  font-weight: 700;
-  color: white;
-}
-
-.count-label {
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.9);
-}
-
-/* 快速统计 */
-.quick-stats {
-  margin-bottom: 24px;
-}
-
-.stat-box {
-  background: white;
-  border-radius: 12px;
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-  margin-bottom: 20px;
-}
-
-.stat-box.warning {
-  border-left: 4px solid #f59e0b;
-}
-
-.stat-box.info {
-  border-left: 4px solid #3b82f6;
-}
-
-.stat-box.success {
-  border-left: 4px solid #10b981;
-}
-
-.stat-icon {
-  font-size: 36px;
-}
-
-.stat-content {
-  flex: 1;
-}
-
-.stat-number {
-  font-size: 28px;
-  font-weight: 700;
-  color: #1f2937;
-  margin-bottom: 4px;
-}
-
-.stat-label {
-  font-size: 13px;
-  color: #6b7280;
-}
-
-/* 空状态 */
-.empty-state {
-  background: white;
-  border-radius: 16px;
-  padding: 80px 20px;
-  text-align: center;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
-}
-
-.empty-icon {
-  font-size: 64px;
-  margin-bottom: 16px;
-}
-
-.empty-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1f2937;
-  margin: 0 0 8px 0;
-}
-
-.empty-desc {
-  font-size: 14px;
-  color: #6b7280;
-  margin: 0;
-}
-
-/* 表格卡片 */
-.table-card {
-  border-radius: 16px;
-  border: none;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
-}
-
-/* 商品单元格 */
-.goods-cell {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.goods-thumb {
-  width: 60px;
-  height: 60px;
-  border-radius: 8px;
-  object-fit: cover;
-  border: 2px solid #f3f4f6;
-}
-
+.goods-thumb,
 .goods-thumb-placeholder {
-  width: 60px;
-  height: 60px;
-  border-radius: 8px;
-  background: #f9fafb;
+  width: 48px;
+  height: 48px;
+  border-radius: 0;
+  border: 1px solid #eee;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+.goods-thumb-placeholder {
+  background: #f8f8f8;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 20px;
 }
-
 .goods-details {
-  flex: 1;
   min-width: 0;
 }
-
 .goods-name {
   font-size: 14px;
   font-weight: 500;
-  color: #1f2937;
-  margin-bottom: 4px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-
 .goods-id {
-  font-size: 12px;
-  color: #9ca3af;
+  font-size: 11px;
+  color: #888;
+  margin-top: 2px;
 }
-
 .price-text {
-  font-size: 16px;
-  font-weight: 700;
-  color: #ef4444;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e53e3e;
 }
 
-.action-btn {
-  font-weight: 500;
+/* 标签统一直角 */
+:deep(.el-tag) {
+  border-radius: 0;
 }
 </style>

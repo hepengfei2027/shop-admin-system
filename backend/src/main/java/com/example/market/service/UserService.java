@@ -7,6 +7,9 @@ import java.util.List;
 
 public interface UserService {
 
+
+
+
     User register(String username, String password, String nickname, String phone, Integer role);
 
     User login(String username, String password, HttpSession session);
@@ -19,6 +22,12 @@ public interface UserService {
 
     void updateAvatar(Long id, String avatar);
 
+    void updatePassword(Long id, String oldPassword, String newPassword);
+
     List<User> findAll();
+
+    void recharge(Long id, java.math.BigDecimal amount);
+
+    boolean payWithBalance(Long id, java.math.BigDecimal amount);
 }
 

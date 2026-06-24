@@ -12,7 +12,6 @@ import PendingGoods from '../admin/PendingGoods.vue';
 import GoodsList from '../admin/GoodsList.vue';
 import UserList from '../admin/UserList.vue';
 import OrderList from '../admin/OrderList.vue';
-import Statistics from '../admin/Statistics.vue';
 import MessageList from '../views/Review/MessageList.vue';
 import Messages from '../views/Review/Messages.vue';
 import Orders from '../views/Orders.vue';
@@ -40,7 +39,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'goods', name: 'GoodsList', component: GoodsList },
       { path: 'users', name: 'UserList', component: UserList },
       { path: 'orders', name: 'OrderList', component: OrderList },
-      { path: 'statistics', name: 'Statistics', component: Statistics },
       { path: '', redirect: '/admin/home' }
     ]
   },

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, inject } from 'vue';
+import { ref, onMounted, inject, computed } from 'vue';
 import { ElMessage, ElTable, ElTableColumn, ElImage, ElTag, ElDialog, ElInput, ElButton } from 'element-plus';
 import { api } from '../api';
 
@@ -13,13 +13,41 @@ const decisionForm = ref({
   decision: '',
   remark: ''
 });
+const searchKeyword = ref('');
+
+// 统计计算：已完成订单、总交易额
+const finishedOrderCount = computed(() => {
+  // 若你的后端已完成状态不是4，自行修改此处数字
+  return orderList.value.filter(order => order.status === 4).length;
+});
+const totalTransactionAmount = computed(() => {
+  const total = orderList.value.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  return total.toFixed(2); // 保留两位小数
+});
 
 const loadOrders = async () => {
   loading.value = true;
   try {
     const res = await api.getAllOrders();
     if (res.data.code === 0) {
-      orderList.value = res.data.data || [];
+      let orders = res.data.data || [];
+      
+      // 前端搜索过滤
+      if (searchKeyword.value.trim()) {
+        const keyword = searchKeyword.value.trim().toLowerCase();
+        orders = orders.filter(order => {
+          const orderId = String(order.id || '').toLowerCase();
+          const goodsName = String(order.goodsName || '').toLowerCase();
+          const buyerName = String(order.buyerNickname || order.buyerUsername || '').toLowerCase();
+          const sellerName = String(order.sellerNickname || order.sellerUsername || '').toLowerCase();
+          return orderId.includes(keyword) || 
+                 goodsName.includes(keyword) || 
+                 buyerName.includes(keyword) || 
+                 sellerName.includes(keyword);
+        });
+      }
+      
+      orderList.value = orders;
       await loadAllDisputes();
     } else {
       ElMessage.error(res.data.msg || '加载订单失败');
@@ -76,14 +104,14 @@ const handleAdminDecision = async (status: number) => {
     ElMessage.warning('请填写判决内容');
     return;
   }
-  
+
   try {
     await api.adminDecision(
-      currentDispute.value.id,
-      decisionForm.value.decision,
-      decisionForm.value.remark,
-      user.value.id,
-      status
+        currentDispute.value.id,
+        decisionForm.value.decision,
+        decisionForm.value.remark,
+        user.value.id,
+        status
     );
     ElMessage.success('判决成功');
     showDisputeDetailDialog.value = false;
@@ -99,7 +127,7 @@ const parseImages = (imagesStr: string) => {
 };
 
 const getStatusType = (status: number) => {
-  const types = ['info', 'warning', 'primary', 'success', 'danger'];
+  const types = ['info', 'warning', 'primary', 'success', 'danger', 'warning'];
   return types[status] || 'info';
 };
 
@@ -125,77 +153,76 @@ onMounted(() => {
         </div>
       </div>
       <div class="header-right">
-        <div class="order-summary">
-          <div class="summary-item">
-            <span class="summary-number">{{ orderList.length }}</span>
-            <span class="summary-label">总订单</span>
-          </div>
-        </div>
-        <el-button type="primary" @click="loadOrders">
-          🔄 刷新
-        </el-button>
+        <el-input
+            v-model="searchKeyword"
+            placeholder="搜索订单号/商品/买家/卖家"
+            size="small"
+            class="search-input"
+            @keyup.enter="loadOrders"
+        >
+          <template #prefix>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+          </template>
+        </el-input>
+        <el-button size="small" @click="loadOrders">🔄 刷新</el-button>
       </div>
     </div>
 
-    <!-- 快速统计 -->
-    <el-row :gutter="20" class="quick-stats">
-      <el-col :xs="12" :sm="6">
-        <div class="stat-box blue">
-          <div class="stat-icon">📋</div>
-          <div class="stat-content">
-            <div class="stat-number">{{ orderList.length }}</div>
-            <div class="stat-label">总订单</div>
-          </div>
+    <!-- 快速统计（修复空白--，显示已完成/总交易额） -->
+    <div class="stats-grid">
+      <div class="stat-box blue">
+        <div class="stat-icon">📋</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ orderList.length }}</div>
+          <div class="stat-label">总订单</div>
         </div>
-      </el-col>
-      <el-col :xs="12" :sm="6">
-        <div class="stat-box success">
-          <div class="stat-icon">✅</div>
-          <div class="stat-content">
-            <div class="stat-number">--</div>
-            <div class="stat-label">已完成</div>
-          </div>
+      </div>
+      <div class="stat-box success">
+        <div class="stat-icon">✅</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ finishedOrderCount }}</div>
+          <div class="stat-label">已完成</div>
         </div>
-      </el-col>
-      <el-col :xs="12" :sm="6">
-        <div class="stat-box warning">
-          <div class="stat-icon">⚖️</div>
-          <div class="stat-content">
-            <div class="stat-number">{{ Object.keys(disputeMap).length }}</div>
-            <div class="stat-label">纠纷订单</div>
-          </div>
+      </div>
+      <div class="stat-box warning">
+        <div class="stat-icon">⚖️</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ Object.keys(disputeMap).length }}</div>
+          <div class="stat-label">纠纷订单</div>
         </div>
-      </el-col>
-      <el-col :xs="12" :sm="6">
-        <div class="stat-box purple">
-          <div class="stat-icon">💰</div>
-          <div class="stat-content">
-            <div class="stat-number">--</div>
-            <div class="stat-label">总交易额</div>
-          </div>
+      </div>
+      <div class="stat-box purple">
+        <div class="stat-icon">💰</div>
+        <div class="stat-content">
+          <div class="stat-number">¥{{ totalTransactionAmount }}</div>
+          <div class="stat-label">总交易额</div>
         </div>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
 
     <!-- 订单列表 -->
-    <el-card class="table-card">
-      <el-table 
-        :data="orderList" 
-        style="width: 100%" 
-        v-loading="loading"
-        stripe
+    <div class="table-wrap">
+      <el-table
+          :data="orderList"
+          style="width: 100%"
+          v-loading="loading"
+          stripe
+          size="small"
       >
-        <el-table-column label="订单号" prop="id" width="100" />
-        
-        <el-table-column label="商品信息" width="320">
+        <el-table-column label="订单号" prop="id" width="90" />
+
+        <el-table-column label="商品信息" min-width="280">
           <template #default="scope">
             <div class="goods-cell">
-              <el-image 
-                v-if="scope.row.goodsImage" 
-                :src="scope.row.goodsImage" 
-                :preview-src-list="[scope.row.goodsImage]"
-                fit="cover"
-                class="goods-image"
+              <el-image
+                  v-if="scope.row.goodsImage"
+                  :src="scope.row.goodsImage"
+                  :preview-src-list="[scope.row.goodsImage]"
+                  fit="cover"
+                  class="goods-image"
               />
               <div v-else class="goods-image-placeholder">
                 📦
@@ -208,11 +235,11 @@ onMounted(() => {
             </div>
           </template>
         </el-table-column>
-        
-        <el-table-column label="买家" width="160">
+
+        <el-table-column label="买家" width="140">
           <template #default="scope">
             <div class="user-cell">
-              <el-avatar :size="36" :src="scope.row.buyerAvatar" class="user-avatar">
+              <el-avatar :size="32" :src="scope.row.buyerAvatar" class="user-avatar">
                 {{ (scope.row.buyerNickname || scope.row.buyerUsername || 'B').charAt(0).toUpperCase() }}
               </el-avatar>
               <div class="user-details">
@@ -222,11 +249,11 @@ onMounted(() => {
             </div>
           </template>
         </el-table-column>
-        
-        <el-table-column label="卖家" width="160">
+
+        <el-table-column label="卖家" width="140">
           <template #default="scope">
             <div class="user-cell">
-              <el-avatar :size="36" :src="scope.row.sellerAvatar" class="user-avatar">
+              <el-avatar :size="32" :src="scope.row.sellerAvatar" class="user-avatar">
                 {{ (scope.row.sellerNickname || scope.row.sellerUsername || 'S').charAt(0).toUpperCase() }}
               </el-avatar>
               <div class="user-details">
@@ -236,14 +263,14 @@ onMounted(() => {
             </div>
           </template>
         </el-table-column>
-        
-        <el-table-column label="订单金额" width="120">
+
+        <el-table-column label="金额" width="100">
           <template #default="scope">
             <span class="price-text">¥{{ scope.row.amount }}</span>
           </template>
         </el-table-column>
-        
-        <el-table-column label="订单状态" width="180">
+
+        <el-table-column label="状态" width="170">
           <template #default="scope">
             <div class="status-cell">
               <el-tag :type="getStatusType(scope.row.status)" size="small">
@@ -252,399 +279,308 @@ onMounted(() => {
               <el-tag v-if="scope.row.afterSaleStatusText" type="danger" size="small">
                 {{ scope.row.afterSaleStatusText }}
               </el-tag>
-              <el-tag 
-                v-if="disputeMap[scope.row.id]" 
-                :type="getDisputeStatusLabel(disputeMap[scope.row.id].status).type" 
-                size="small"
+              <el-tag
+                  v-if="disputeMap[scope.row.id]"
+                  :type="getDisputeStatusLabel(disputeMap[scope.row.id].status).type"
+                  size="small"
               >
                 ⚖️ {{ getDisputeStatusLabel(disputeMap[scope.row.id].status).label }}
               </el-tag>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right">
+
+        <el-table-column label="操作" width="110" fixed="right">
           <template #default="scope">
-            <el-button 
-              v-if="disputeMap[scope.row.id]" 
-              type="primary" 
-              size="small"
-              @click="openDisputeDetail(scope.row.id)"
+            <el-button
+                v-if="disputeMap[scope.row.id]"
+                type="primary"
+                size="mini"
+                @click="openDisputeDetail(scope.row.id)"
             >
               纠纷详情
             </el-button>
           </template>
         </el-table-column>
-        
-        <el-table-column label="下单时间" width="180">
+
+        <el-table-column label="下单时间" width="160">
           <template #default="scope">
             {{ formatDate(scope.row.createTime) }}
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
-    
+    </div>
+
     <!-- 纠纷详情对话框 -->
-    <el-dialog v-model="showDisputeDetailDialog" title="纠纷详情" width="600px">
+    <el-dialog v-model="showDisputeDetailDialog" title="纠纷详情" width="520px" :show-close="false">
       <div v-if="currentDispute" class="dispute-detail">
         <div class="section buyer-section">
           <h4>👤 买家申诉</h4>
           <p class="content">{{ currentDispute.buyerContent || '无描述' }}</p>
           <div v-if="parseImages(currentDispute.buyerImages).length > 0" class="image-list">
-            <el-image 
-              v-for="(url, index) in parseImages(currentDispute.buyerImages)" 
-              :key="index"
-              :src="url"
-              :preview-src-list="parseImages(currentDispute.buyerImages)"
-              fit="cover"
-              class="dispute-image"
+            <el-image
+                v-for="(url, index) in parseImages(currentDispute.buyerImages)"
+                :key="index"
+                :src="url"
+                :preview-src-list="parseImages(currentDispute.buyerImages)"
+                fit="cover"
+                class="dispute-image"
             />
           </div>
         </div>
-        
+
         <div v-if="currentDispute.sellerReply" class="section seller-section">
           <h4>🏪 卖家回复</h4>
           <p class="content">{{ currentDispute.sellerReply }}</p>
           <div v-if="parseImages(currentDispute.sellerImages).length > 0" class="image-list">
-            <el-image 
-              v-for="(url, index) in parseImages(currentDispute.sellerImages)" 
-              :key="index"
-              :src="url"
-              :preview-src-list="parseImages(currentDispute.sellerImages)"
-              fit="cover"
-              class="dispute-image"
+            <el-image
+                v-for="(url, index) in parseImages(currentDispute.sellerImages)"
+                :key="index"
+                :src="url"
+                :preview-src-list="parseImages(currentDispute.sellerImages)"
+                fit="cover"
+                class="dispute-image"
             />
           </div>
         </div>
-        
+
         <div v-if="currentDispute.adminDecision" class="section admin-section">
           <h4>⚖️ 管理员判决</h4>
           <p class="content">{{ currentDispute.adminDecision }}</p>
           <p v-if="currentDispute.adminRemark" class="remark">备注：{{ currentDispute.adminRemark }}</p>
         </div>
-        
+
         <div v-if="currentDispute.status === 1 || currentDispute.status === 2" class="decision-section">
           <h4>📝 进行判决</h4>
-          <el-input 
-            v-model="decisionForm.decision" 
-            type="textarea" 
-            :rows="3" 
-            placeholder="请填写判决内容..."
+          <el-input
+              v-model="decisionForm.decision"
+              type="textarea"
+              :rows="2"
+              placeholder="请填写判决内容..."
           />
-          <el-input 
-            v-model="decisionForm.remark" 
-            type="textarea" 
-            :rows="2" 
-            placeholder="备注（可选）"
-            style="margin-top: 12px"
+          <el-input
+              v-model="decisionForm.remark"
+              type="textarea"
+              :rows="1"
+              placeholder="备注（可选）"
+              style="margin-top:8px"
           />
           <div class="decision-buttons">
-            <el-button type="primary" size="large" @click="handleAdminDecision(3)">
-              判买家退货
-            </el-button>
-            <el-button type="success" size="large" @click="handleAdminDecision(4)">
-              判卖家退款
-            </el-button>
+            <el-button size="small" type="primary" @click="handleAdminDecision(3)">判买家退货</el-button>
+            <el-button size="small" type="success" @click="handleAdminDecision(4)">判卖家退款</el-button>
           </div>
         </div>
       </div>
       <template #footer>
-        <el-button @click="showDisputeDetailDialog = false">关闭</el-button>
+        <el-button size="small" @click="showDisputeDetailDialog = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
+* { margin: 0; padding: 0; box-sizing: border-box; }
 .order-list {
-  padding: 0;
+  width: 100%;
+  color: #333;
 }
 
-/* 页面标题 */
+/* 页面头部 */
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 24px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee;
 }
-
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
-
-.page-icon {
-  font-size: 40px;
-}
-
+.page-icon { font-size: 24px; }
 .page-title {
-  font-size: 24px;
-  font-weight: 700;
-  color: #1f2937;
-  margin: 0 0 4px 0;
-}
-
-.page-desc {
-  font-size: 14px;
-  color: #6b7280;
+  font-size: 18px;
+  font-weight: 600;
   margin: 0;
 }
-
+.page-desc {
+  font-size: 12px;
+  color: #666;
+  margin-top: 2px;
+}
 .header-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
-
-.order-summary {
-  display: flex;
-  gap: 20px;
-  background: white;
-  padding: 12px 24px;
-  border-radius: 12px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+.search-input {
+  width: 240px;
 }
+:deep(.el-button) { border-radius: 0; }
 
-.summary-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+/* 统计网格 紧凑四等分 */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4,1fr);
+  gap: 12px;
+  margin-bottom: 16px;
 }
-
-.summary-number {
-  font-size: 24px;
-  font-weight: 700;
-  color: #1f2937;
-}
-
-.summary-label {
-  font-size: 13px;
-  color: #6b7280;
-  margin-top: 2px;
-}
-
-/* 快速统计 */
-.quick-stats {
-  margin-bottom: 24px;
-}
-
 .stat-box {
-  background: white;
-  border-radius: 12px;
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-  margin-bottom: 20px;
+  background: #fff;
+  border:1px solid #eee;
+  border-radius:0;
+  padding:14px 10px;
+  display:flex;
+  align-items:center;
+  gap:10px;
 }
+/* 顶部细线标识，取消粗左边框 */
+.stat-box.blue { border-top:3px solid #3b82f6; }
+.stat-box.success { border-top:3px solid #10b981; }
+.stat-box.warning { border-top:3px solid #f59e0b; }
+.stat-box.purple { border-top:3px solid #8b5cf6; }
+.stat-icon { font-size:24px; }
+.stat-content { flex:1; text-align:center; }
+.stat-number { font-size:20px; font-weight:600; }
+.stat-label { font-size:12px; color:#666; margin-top:3px; }
 
-.stat-box.blue {
-  border-left: 4px solid #3b82f6;
+/* 表格容器 */
+.table-wrap {
+  width:100%;
+  background:#fff;
+  border:1px solid #eee;
 }
-
-.stat-box.success {
-  border-left: 4px solid #10b981;
+:deep(.el-table) {
+  --el-table-row-hover-bg-color:#fafafa;
 }
-
-.stat-box.warning {
-  border-left: 4px solid #f59e0b;
+:deep(.el-table th),:deep(.el-table td) {
+  padding:8px 10px;
 }
-
-.stat-box.purple {
-  border-left: 4px solid #8b5cf6;
-}
-
-.stat-icon {
-  font-size: 36px;
-}
-
-.stat-content {
-  flex: 1;
-}
-
-.stat-number {
-  font-size: 28px;
-  font-weight: 700;
-  color: #1f2937;
-  margin-bottom: 4px;
-}
-
-.stat-label {
-  font-size: 13px;
-  color: #6b7280;
-}
-
-/* 表格卡片 */
-.table-card {
-  border-radius: 16px;
-  border: none;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+:deep(.el-table__header-wrapper) {
+  border-bottom:1px solid #eee;
 }
 
 /* 商品单元格 */
 .goods-cell {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
+  display:flex;
+  gap:8px;
+  align-items:flex-start;
 }
-
-.goods-image {
-  width: 64px;
-  height: 64px;
-  border-radius: 8px;
-  flex-shrink: 0;
-  border: 2px solid #f3f4f6;
+.goods-image,.goods-image-placeholder {
+  width:48px;
+  height:48px;
+  border-radius:0;
+  border:1px solid #eee;
+  flex-shrink:0;
 }
-
 .goods-image-placeholder {
-  width: 64px;
-  height: 64px;
-  border-radius: 8px;
-  background: #f9fafb;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 28px;
-  flex-shrink: 0;
+  background:#f8f8f8;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:20px;
 }
-
-.goods-details {
-  flex: 1;
-  min-width: 0;
-}
-
+.goods-details { min-width:0; }
 .goods-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f2937;
-  margin-bottom: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size:14px;
+  font-weight:500;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
-
 .goods-desc {
-  font-size: 12px;
-  color: #9ca3af;
-  margin-bottom: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size:12px;
+  color:#888;
+  margin:2px 0;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
-
-.goods-price {
-  font-size: 14px;
-  color: #ef4444;
-  font-weight: 700;
-}
-
-.price-text {
-  font-size: 16px;
-  font-weight: 700;
-  color: #ef4444;
-}
+.goods-price { font-size:13px; color:#e53e3e; font-weight:500; }
+.price-text { font-size:14px; font-weight:600; color:#e53e3e; }
 
 /* 用户单元格 */
 .user-cell {
-  display: flex;
-  gap: 10px;
-  align-items: center;
+  display:flex;
+  align-items:center;
+  gap:8px;
 }
-
 .user-avatar {
-  border: 2px solid #f3f4f6;
+  border-radius:0;
+  border:1px solid #eee;
 }
-
-.user-details {
-  flex: 1;
-  min-width: 0;
-}
-
+.user-details { min-width:0; }
 .user-details > div:first-child {
-  font-size: 14px;
-  color: #1f2937;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size:13px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
-
-.user-username {
-  font-size: 12px;
-  color: #9ca3af;
-  margin-top: 2px;
-}
+.user-username { font-size:11px; color:#888; margin-top:2px; }
 
 .status-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display:flex;
+  flex-direction:column;
+  gap:3px;
 }
+:deep(.el-tag) { border-radius:0; }
 
-/* 纠纷详情 */
-.dispute-detail {
-  padding: 10px 0;
-}
-
+/* 纠纷弹窗 */
+.dispute-detail { padding:8px 0; }
 .section {
-  padding: 16px;
-  background: #f9fafb;
-  border-radius: 12px;
-  margin-bottom: 16px;
+  padding:12px;
+  background:#f8f8f8;
+  border:1px solid #eee;
+  border-radius:0;
+  margin-bottom:12px;
 }
-
 .section h4 {
-  margin: 0 0 12px 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: #1f2937;
+  font-size:14px;
+  margin-bottom:8px;
+  font-weight:600;
 }
-
-.section .content {
-  margin: 0;
-  font-size: 14px;
-  color: #4b5563;
-  line-height: 1.6;
-}
-
-.section .remark {
-  margin: 10px 0 0 0;
-  font-size: 13px;
-  color: #6b7280;
-}
+.content { font-size:13px; line-height:1.5; color:#444; }
+.remark { font-size:12px; color:#666; margin-top:6px; }
 
 .image-list {
-  display: flex;
-  gap: 12px;
-  margin-top: 12px;
-  flex-wrap: wrap;
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:8px;
 }
-
 .dispute-image {
-  width: 80px;
-  height: 80px;
-  border-radius: 8px;
-  border: 2px solid #e5e7eb;
+  width:64px;
+  height:64px;
+  border-radius:0;
+  border:1px solid #ddd;
 }
 
 .decision-section {
-  padding: 16px;
-  border: 2px dashed #3b82f6;
-  border-radius: 12px;
-  background: #eff6ff;
+  padding:12px;
+  border:1px dashed #3b82f6;
+  background:#f7fbff;
 }
+.decision-section h4 { margin-bottom:8px; font-size:14px; }
+.decision-buttons { margin-top:12px; display:flex; gap:10px; }
 
-.decision-section h4 {
-  margin: 0 0 12px 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: #1d4ed8;
+/* 弹窗全局穿透样式 */
+:deep(.el-dialog) {
+  border-radius:0;
+  box-shadow:none;
+  border:1px solid #eee;
 }
-
-.decision-buttons {
-  margin-top: 16px;
-  display: flex;
-  gap: 12px;
+:deep(.el-dialog__header) {
+  border-bottom:1px solid #eee;
+  padding:10px 16px;
+}
+:deep(.el-dialog__footer) {
+  border-top:1px solid #eee;
+  padding:10px 16px;
+  text-align:right;
+}
+:deep(.el-input__inner),:deep(.el-textarea__inner) {
+  border-radius:0;
 }
 </style>

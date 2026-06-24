@@ -33,6 +33,11 @@ public class GoodsServiceImpl implements GoodsService {
     }
 
     @Override
+    public List<Goods> listAll() {
+        return goodsMapper.findAll();
+    }
+
+    @Override
     public List<Goods> search(String keyword) {
         return goodsMapper.search(keyword);
     }

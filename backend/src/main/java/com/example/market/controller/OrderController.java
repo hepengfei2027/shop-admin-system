@@ -69,6 +69,20 @@ public class OrderController {
         return Result.ok(null);
     }
 
+    /**
+     * 余额支付
+     * @param id 订单ID
+     * @param buyerId 买家ID
+     * @param paymentMethod 支付方式：balance/wechat/alipay
+     */
+    @PostMapping("/{id}/payV2")
+    public Result<Void> payOrderV2(@PathVariable java.lang.Long id,
+                                    @RequestParam java.lang.Long buyerId,
+                                    @RequestParam(required = false, defaultValue = "wechat") String paymentMethod) {
+        orderService.payOrderV2(id, buyerId, paymentMethod);
+        return Result.ok(null);
+    }
+
     @PostMapping("/{id}/cancel")
     public Result<Void> cancelOrder(@PathVariable java.lang.Long id,
                                       @RequestParam java.lang.Long userId) {

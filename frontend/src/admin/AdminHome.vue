@@ -11,6 +11,8 @@ const platformStats = ref({
   totalGoods: 0,
   totalOrders: 0,
   totalRevenue: 0,
+  totalRefunds: 0,
+  refundRate: 0,
   pendingOrders: 0,
   completedOrders: 0,
   bannedUsers: 0,
@@ -40,9 +42,36 @@ const orderAnalysis = ref({
   completionRate: 0
 });
 
-// 加载全平台数据
+// 加载全平台真实后端数据
 const loadPlatformData = async () => {
   loading.value = true;
+  // 每次加载先清空旧数据，杜绝残留假数据
+  platformStats.value = {
+    totalUsers: 0,
+    totalGoods: 0,
+    totalOrders: 0,
+    totalRevenue: 0,
+    pendingOrders: 0,
+    completedOrders: 0,
+    bannedUsers: 0,
+    activeSellers: 0
+  };
+  salesTrend.value = [];
+  topGoods.value = [];
+  userAnalysis.value = {
+    totalBuyers: 0,
+    totalSellers: 0,
+    newUsersToday: 0,
+    activeUsers: 0,
+    topSpendingUsers: [],
+    topActiveUsers: []
+  };
+  orderAnalysis.value = {
+    avgOrderValue: 0,
+    refundRate: 0,
+    completionRate: 0
+  };
+
   try {
     // 获取统计数据概览
     const statsRes = await api.getStatisticsOverview();
@@ -53,6 +82,8 @@ const loadPlatformData = async () => {
         totalGoods: data.totalGoods || 0,
         totalOrders: data.totalOrders || 0,
         totalRevenue: data.totalRevenue || 0,
+        totalRefunds: data.totalRefunds || 0,
+        refundRate: data.refundRate || 0,
         pendingOrders: data.pendingOrders || 0,
         completedOrders: data.completedOrders || 0,
         bannedUsers: data.bannedUsers || 0,
@@ -85,6 +116,14 @@ const loadPlatformData = async () => {
       };
     }
 
+    // 重新统计买家和卖家（排除管理员）
+    const allUsersRes = await api.listUsers();
+    if (allUsersRes.data.code === 0) {
+      const allUsers = allUsersRes.data.data || [];
+      userAnalysis.value.totalBuyers = allUsers.filter(u => u.role === 0).length;
+      userAnalysis.value.totalSellers = allUsers.filter(u => u.role === 2).length;
+    }
+
     // 获取订单分析
     const orderRes = await api.getOrderAnalysis();
     if (orderRes.data.code === 0) {
@@ -96,13 +135,14 @@ const loadPlatformData = async () => {
     }
   } catch (err) {
     console.error('加载平台数据失败', err);
-    // 使用模拟数据
-    initMockData();
+    ElMessage.error('加载统计数据失败，请检查接口或网络');
+    // 【关键修改】异常不再加载模拟假数据，保持空白真实状态
+    // initMockData(); // 注释掉模拟数据，彻底禁用假数据
   }
   loading.value = false;
 };
 
-// 初始化模拟数据（用于演示）
+// 仅保留，演示备用，页面不再自动调用
 const initMockData = () => {
   platformStats.value = {
     totalUsers: 15234,
@@ -162,23 +202,26 @@ const initMockData = () => {
 
 // 格式化金额
 const formatMoney = (amount: number) => {
-  if (amount >= 10000) {
-    return '￥' + (amount / 10000).toFixed(1) + '万';
+  const num = Number(amount) || 0;
+  if (num >= 10000) {
+    return '￥' + (num / 10000).toFixed(1) + '万';
   }
-  return '￥' + (amount || 0).toFixed(2);
+  return '￥' + num.toFixed(2);
 };
 
 // 格式化数字
 const formatNumber = (num: number) => {
-  if (num >= 10000) {
-    return (num / 10000).toFixed(1) + '万';
+  const n = Number(num) || 0;
+  if (n >= 10000) {
+    return (n / 10000).toFixed(1) + '万';
   }
-  return num.toLocaleString();
+  return n.toLocaleString();
 };
 
 // 格式化百分比
 const formatPercent = (value: number) => {
-  return (value || 0).toFixed(1) + '%';
+  const v = Number(value) || 0;
+  return v.toFixed(1) + '%';
 };
 
 onMounted(() => {
@@ -189,7 +232,12 @@ onMounted(() => {
 <template>
   <div class="analytics-page">
     <h2>全平台数据概览</h2>
-    
+
+    <!-- 加载遮罩 -->
+    <div v-if="loading" class="loading-mask">
+      正在加载真实统计数据...
+    </div>
+
     <!-- 核心指标卡片 -->
     <div class="metrics-grid">
       <div class="metric-card">
@@ -199,7 +247,7 @@ onMounted(() => {
           <div class="metric-label">注册用户</div>
         </div>
       </div>
-      
+
       <div class="metric-card">
         <div class="metric-icon goods">📦</div>
         <div class="metric-content">
@@ -207,7 +255,7 @@ onMounted(() => {
           <div class="metric-label">上架商品</div>
         </div>
       </div>
-      
+
       <div class="metric-card">
         <div class="metric-icon orders">🛒</div>
         <div class="metric-content">
@@ -215,7 +263,7 @@ onMounted(() => {
           <div class="metric-label">总订单数</div>
         </div>
       </div>
-      
+
       <div class="metric-card">
         <div class="metric-icon revenue">💰</div>
         <div class="metric-content">
@@ -223,21 +271,38 @@ onMounted(() => {
           <div class="metric-label">平台营收</div>
         </div>
       </div>
+
+      <div class="metric-card">
+        <div class="metric-icon refunds">🔄</div>
+        <div class="metric-content">
+          <div class="metric-value">{{ formatNumber(platformStats.totalRefunds) }}</div>
+          <div class="metric-label">退货申请数</div>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-icon rate">📊</div>
+        <div class="metric-content">
+          <div class="metric-value">{{ formatPercent(platformStats.refundRate) }}</div>
+          <div class="metric-label">退货率</div>
+        </div>
+      </div>
     </div>
 
     <!-- 销售趋势 -->
     <div class="section-card">
       <h3>平台销售趋势（近7天）</h3>
-      <div class="trend-chart">
+      <div v-if="salesTrend.length === 0 && !loading" class="empty-state">暂无趋势数据</div>
+      <div v-else class="trend-chart">
         <div class="chart-container">
-          <div 
-            v-for="(item, index) in salesTrend" 
-            :key="index" 
-            class="chart-bar-wrapper"
+          <div
+              v-for="(item, index) in salesTrend"
+              :key="index"
+              class="chart-bar-wrapper"
           >
-            <div 
-              class="chart-bar" 
-              :style="{ height: (item.amount / Math.max(...salesTrend.map(s => s.amount), 1) * 150) + 'px' }"
+            <div
+                class="chart-bar"
+                :style="{ height: (item.amount / Math.max(...salesTrend.map(s => s.amount), 1) * 150) + 'px' }"
             >
               <span class="bar-value">{{ formatMoney(item.amount) }}</span>
             </div>
@@ -247,35 +312,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 平台商品销售排行 -->
-    <div class="section-card">
-      <h3>平台商品销售排行 TOP10</h3>
-      <div class="goods-table">
-        <div class="table-header">
-          <span class="col-rank">排名</span>
-          <span class="col-name">商品名称</span>
-          <span class="col-sales">销量</span>
-          <span class="col-revenue">销售额</span>
-        </div>
-        <div v-if="topGoods.length === 0" class="empty-state">
-          暂无销售数据
-        </div>
-        <div 
-          v-for="(item, index) in topGoods.slice(0, 10)" 
-          :key="item.goodsId" 
-          class="table-row"
-        >
-          <span class="col-rank">
-            <span :class="['rank-badge', `rank-${index + 1}`]">{{ index + 1 }}</span>
-          </span>
-          <span class="col-name">{{ item.title }}</span>
-          <span class="col-sales">{{ item.salesCount }} 件</span>
-          <span class="col-revenue">{{ formatMoney(item.revenue) }}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 用户分析 -->
+    <!-- 用户分析 移到商品排行上方 -->
     <div class="section-card">
       <h3>用户分析</h3>
       <div class="user-stats-grid">
@@ -308,17 +345,17 @@ onMounted(() => {
           </div>
         </div>
       </div>
-      
+
       <div class="user-lists">
         <div class="user-list-section">
           <h4>消费金额排行</h4>
-          <div v-if="userAnalysis.topSpendingUsers.length === 0" class="empty-state">
+          <div v-if="userAnalysis.topSpendingUsers.length === 0 && !loading" class="empty-state">
             暂无数据
           </div>
-          <div 
-            v-for="(user, index) in userAnalysis.topSpendingUsers" 
-            :key="user.id" 
-            class="user-item"
+          <div
+              v-for="(user, index) in userAnalysis.topSpendingUsers"
+              :key="user.id"
+              class="user-item"
           >
             <span class="user-rank">{{ index + 1 }}</span>
             <span class="user-avatar">{{ user.username.charAt(0).toUpperCase() }}</span>
@@ -327,16 +364,16 @@ onMounted(() => {
             <span class="user-amount">{{ formatMoney(user.totalAmount) }}</span>
           </div>
         </div>
-        
+
         <div class="user-list-section">
           <h4>活跃度排行</h4>
-          <div v-if="userAnalysis.topActiveUsers.length === 0" class="empty-state">
+          <div v-if="userAnalysis.topActiveUsers.length === 0 && !loading" class="empty-state">
             暂无数据
           </div>
-          <div 
-            v-for="(user, index) in userAnalysis.topActiveUsers" 
-            :key="user.id" 
-            class="user-item"
+          <div
+              v-for="(user, index) in userAnalysis.topActiveUsers"
+              :key="user.id"
+              class="user-item"
           >
             <span class="user-rank">{{ index + 1 }}</span>
             <span class="user-avatar">{{ user.username.charAt(0).toUpperCase() }}</span>
@@ -344,6 +381,34 @@ onMounted(() => {
             <span class="user-orders">{{ user.orderCount }} 单</span>
             <span class="user-amount">{{ formatMoney(user.totalAmount) }}</span>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 平台商品销售排行 -->
+    <div class="section-card">
+      <h3>平台商品销售排行 TOP10</h3>
+      <div class="goods-table">
+        <div class="table-header">
+          <span class="col-rank">排名</span>
+          <span class="col-name">商品名称</span>
+          <span class="col-sales">销量</span>
+          <span class="col-revenue">销售额</span>
+        </div>
+        <div v-if="topGoods.length === 0 && !loading" class="empty-state">
+          暂无销售数据
+        </div>
+        <div
+            v-for="(item, index) in topGoods.slice(0, 10)"
+            :key="item.goodsId"
+            class="table-row"
+        >
+          <span class="col-rank">
+            <span :class="['rank-badge', `rank-${index + 1}`]">{{ index + 1 }}</span>
+          </span>
+          <span class="col-name">{{ item.title }}</span>
+          <span class="col-sales">{{ item.salesCount }} 件</span>
+          <span class="col-revenue">{{ formatMoney(item.revenue) }}</span>
         </div>
       </div>
     </div>
@@ -395,6 +460,16 @@ onMounted(() => {
           <span class="suggestion-icon">🔒</span>
           <span>当前封禁用户 {{ platformStats.bannedUsers }} 人</span>
         </div>
+        <div v-if="
+          platformStats.pendingOrders <= 100
+          && orderAnalysis.completionRate < 90
+          && orderAnalysis.refundRate >=5
+          && userAnalysis.newUsersToday <=30
+          && platformStats.bannedUsers === 0
+        " class="suggestion-item">
+          <span class="suggestion-icon">📋</span>
+          <span>暂无特殊平台提示</span>
+        </div>
       </div>
     </div>
   </div>
@@ -402,81 +477,110 @@ onMounted(() => {
 
 <style scoped>
 .analytics-page {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 20px;
+  max-width: 100%;
+  margin: 0;
+  padding: 16px;
+}
+
+.loading-mask {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+  font-size: 14px;
 }
 
 h2 {
-  text-align: center;
-  margin-bottom: 30px;
+  margin: 0 0 16px 0;
   color: #333;
+  font-size: 18px;
+  font-weight: 600;
 }
 
-/* 核心指标卡片 */
+/* 核心指标卡片 简约扁平化统一风格 */
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 20px;
-  margin-bottom: 30px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .metric-card {
-  background: white;
-  border-radius: 12px;
-  padding: 20px;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 0;
+  padding: 14px 10px;
   display: flex;
   align-items: center;
-  gap: 15px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  gap: 10px;
+  box-shadow: none;
+  position: relative;
+  overflow: hidden;
 }
+.metric-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 3px;
+  height: 100%;
+}
+.metric-card:nth-child(1)::before { background: #667eea; }
+.metric-card:nth-child(2)::before { background: #f5576c; }
+.metric-card:nth-child(3)::before { background: #00f2fe; }
+.metric-card:nth-child(4)::before { background: #38f9d7; }
+.metric-card:nth-child(5)::before { background: #f59e0b; }
+.metric-card:nth-child(6)::before { background: #8b5cf6; }
 
 .metric-icon {
-  width: 50px;
-  height: 50px;
-  border-radius: 12px;
+  width: 44px;
+  height: 44px;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 22px;
 }
 
-.metric-icon.users { background: linear-gradient(135deg, #667eea, #764ba2); }
-.metric-icon.goods { background: linear-gradient(135deg, #f093fb, #f5576c); }
-.metric-icon.orders { background: linear-gradient(135deg, #4facfe, #00f2fe); }
-.metric-icon.revenue { background: linear-gradient(135deg, #43e97b, #38f9d7); }
+.metric-icon.users { background: #eef2ff; }
+.metric-icon.goods { background: #fef2f7; }
+.metric-icon.orders { background: #e6fbfe; }
+.metric-icon.revenue { background: #ecfdf7; }
+.metric-icon.refunds { background: #fef3c7; }
+.metric-icon.rate { background: #ede9fe; }
 
 .metric-value {
-  font-size: 24px;
-  font-weight: 700;
-  color: #333;
+  font-size: 20px;
+  font-weight: 600;
+  color: #222;
 }
 
 .metric-label {
-  font-size: 14px;
-  color: #999;
-  margin-top: 4px;
+  font-size: 12px;
+  color: #666;
+  margin-top: 3px;
 }
 
 /* 区块卡片 */
 .section-card {
   background: white;
-  border-radius: 12px;
-  padding: 20px;
-  margin-bottom: 20px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  border: 1px solid #eee;
+  border-radius: 0;
+  padding: 14px;
+  margin-bottom: 12px;
+  box-shadow: none;
 }
 
 .section-card h3 {
-  margin: 0 0 20px 0;
-  font-size: 18px;
+  margin: 0 0 12px 0;
+  font-size: 16px;
   color: #333;
+  font-weight: 600;
 }
 
 .section-card h4 {
-  margin: 20px 0 12px 0;
-  font-size: 15px;
-  color: #666;
+  margin: 16px 0 8px 0;
+  font-size: 14px;
+  color: #555;
 }
 
 /* 销售趋势图表 */
@@ -487,9 +591,9 @@ h2 {
 .chart-container {
   display: flex;
   align-items: flex-end;
-  gap: 15px;
-  height: 200px;
-  padding: 20px 0;
+  gap: 10px;
+  height: 180px;
+  padding: 16px 0;
 }
 
 .chart-bar-wrapper {
@@ -497,31 +601,31 @@ h2 {
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-width: 60px;
+  min-width: 50px;
 }
 
 .chart-bar {
   width: 100%;
-  max-width: 50px;
-  background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
-  border-radius: 6px 6px 0 0;
+  max-width: 40px;
+  background: #667eea;
+  border-radius: 0;
   display: flex;
   justify-content: center;
-  padding-top: 8px;
-  min-height: 20px;
-  transition: height 0.3s ease;
+  padding-top: 6px;
+  min-height: 10px;
 }
 
 .bar-value {
-  font-size: 10px;
+  font-size: 9px;
   color: white;
-  font-weight: 600;
+  font-weight: 500;
+  writing-mode: vertical-rl;
 }
 
 .chart-label {
-  font-size: 12px;
-  color: #999;
-  margin-top: 8px;
+  font-size: 11px;
+  color: #777;
+  margin-top: 6px;
 }
 
 /* 商品表格 */
@@ -532,104 +636,107 @@ h2 {
 .table-header, .table-row {
   display: flex;
   align-items: center;
-  padding: 12px 0;
-  border-bottom: 1px solid #f0f0f0;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
 }
 
 .table-header {
   font-weight: 600;
-  color: #666;
-  font-size: 14px;
+  color: #555;
+  font-size: 13px;
 }
 
 .table-row:hover {
   background: #fafafa;
 }
 
-.col-rank { width: 60px; text-align: center; }
-.col-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.col-sales { width: 100px; text-align: center; }
-.col-revenue { width: 120px; text-align: right; }
+.col-rank { width: 50px; text-align: center; }
+.col-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size:13px; }
+.col-sales { width: 80px; text-align: center; font-size:13px; }
+.col-revenue { width: 110px; text-align: right; font-size:13px; color:#e53e3e; font-weight:500; }
 
 .rank-badge {
   display: inline-block;
-  width: 24px;
-  height: 24px;
-  line-height: 24px;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
   text-align: center;
-  border-radius: 50%;
-  font-size: 12px;
+  border-radius: 0;
+  font-size: 11px;
   font-weight: 600;
   background: #f0f0f0;
   color: #666;
 }
 
-.rank-badge.rank-1 { background: linear-gradient(135deg, #ffd700, #ffec8b); color: #8b6914; }
-.rank-badge.rank-2 { background: linear-gradient(135deg, #c0c0c0, #e8e8e8); color: #666; }
-.rank-badge.rank-3 { background: linear-gradient(135deg, #cd7f32, #daa06d); color: #5c3d1e; }
+.rank-badge.rank-1 { background: #ffd700; color: #333; }
+.rank-badge.rank-2 { background: #c0c0c0; color: #fff; }
+.rank-badge.rank-3 { background: #cd7f32; color: #fff; }
 
 /* 用户分析 */
 .user-stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 16px;
-  margin-bottom: 20px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
 }
 
 .user-stat-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px;
+  gap: 8px;
+  padding: 10px;
   background: #f9fafb;
-  border-radius: 8px;
+  border:1px solid #eee;
+  border-radius: 0;
 }
 
 .stat-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  font-size: 18px;
 }
 
-.stat-icon.buyers { background: linear-gradient(135deg, #f093fb, #f5576c); }
-.stat-icon.sellers { background: linear-gradient(135deg, #4facfe, #00f2fe); }
-.stat-icon.new { background: linear-gradient(135deg, #43e97b, #38f9d7); }
-.stat-icon.active { background: linear-gradient(135deg, #fa709a, #fee140); }
+.stat-icon.buyers { background: #fef2f7; color:#f5576c; }
+.stat-icon.sellers { background: #e6fbfe; color:#00f2fe; }
+.stat-icon.new { background: #ecfdf7; color:#38f9d7; }
+.stat-icon.active { background: #fff3e0; color:#fa709a; }
 
 .user-stat-item .stat-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: #333;
+  font-size: 18px;
+  font-weight: 600;
+  color: #222;
 }
 
 .user-stat-item .stat-label {
-  font-size: 12px;
-  color: #999;
+  font-size: 11px;
+  color: #777;
   margin-top: 2px;
 }
 
 .user-lists {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
 }
 
 .user-list-section {
-  padding: 16px;
+  padding: 10px;
   background: #fafafa;
-  border-radius: 8px;
+  border:1px solid #eee;
+  border-radius: 0;
 }
 
 .user-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 0;
-  border-bottom: 1px solid #f0f0f0;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+  font-size:13px;
 }
 
 .user-item:last-child {
@@ -637,65 +744,65 @@ h2 {
 }
 
 .user-rank {
-  width: 22px;
-  height: 22px;
-  line-height: 22px;
+  width: 20px;
+  height: 20px;
+  line-height: 20px;
   text-align: center;
   background: #e5e7eb;
-  border-radius: 50%;
-  font-size: 11px;
+  border-radius: 0;
+  font-size: 10px;
   font-weight: 600;
   color: #666;
 }
 
 .user-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  width: 28px;
+  height: 28px;
+  border-radius: 0;
+  background: #667eea;
   color: white;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .user-name {
   flex: 1;
   font-weight: 500;
-  font-size: 14px;
 }
 
 .user-orders {
   color: #666;
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .user-amount {
   color: #ff4757;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 /* 订单分析 */
 .order-stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
 }
 
 .order-stat-item {
   text-align: center;
-  padding: 20px;
+  padding: 12px;
   background: #f9fafb;
-  border-radius: 8px;
+  border:1px solid #eee;
+  border-radius: 0;
 }
 
 .order-stat-item .stat-value {
-  font-size: 28px;
-  font-weight: 700;
-  color: #333;
+  font-size: 22px;
+  font-weight: 600;
+  color: #222;
 }
 
 .order-stat-item .stat-value.warning {
@@ -707,61 +814,59 @@ h2 {
 }
 
 .order-stat-item .stat-label {
-  font-size: 13px;
-  color: #999;
-  margin-top: 4px;
+  font-size: 12px;
+  color: #777;
+  margin-top: 3px;
 }
 
 /* 平台健康度 */
 .suggestions {
-  background: linear-gradient(135deg, #e8f5e9 0%, #fff 100%);
+  background: #f8fbf8;
+  border:1px solid #e0efe0;
 }
 
 .suggestion-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .suggestion-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
+  gap: 8px;
+  padding: 10px 12px;
   background: white;
-  border-radius: 8px;
-  font-size: 14px;
-  color: #666;
+  border:1px solid #eee;
+  border-radius: 0;
+  font-size: 13px;
+  color: #444;
 }
 
 .suggestion-icon {
-  font-size: 18px;
+  font-size: 16px;
 }
 
 /* 空状态 */
 .empty-state {
   text-align: center;
-  padding: 30px;
+  padding: 24px;
   color: #999;
-  font-size: 13px;
+  font-size: 12px;
 }
 
-/* 响应式 */
+/* 响应式适配 */
 @media (max-width: 768px) {
   .metrics-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  
+
   .user-stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  
+
   .order-stats-grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-  
-  .chart-container {
-    gap: 8px;
   }
 
   .user-lists {

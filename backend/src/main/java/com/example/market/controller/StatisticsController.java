@@ -34,15 +34,39 @@ public class StatisticsController {
         Map<String, Object> data = new HashMap<>();
         
         List<Order> allOrders = orderMapper.findAll();
+        List<User> allUsers = userMapper.findAll();
+        List<Goods> allGoods = goodsMapper.findAll();
         
+        // 总营收（已完成订单）
         double totalRevenue = allOrders.stream()
                 .filter(o -> o.getStatus() == 3)
                 .mapToDouble(o -> o.getAmount() != null ? o.getAmount().doubleValue() : 0)
                 .sum();
         
-        long totalOrders = allOrders.stream()
+        // 总订单数
+        long totalOrders = allOrders.size();
+        
+        // 已完成订单数
+        long completedOrders = allOrders.stream()
                 .filter(o -> o.getStatus() == 3)
                 .count();
+        
+        // 待处理订单数（待付款、待发货）
+        long pendingOrders = allOrders.stream()
+                .filter(o -> o.getStatus() == 1 || o.getStatus() == 2)
+                .count();
+        
+        // 封禁用户数
+        long bannedUsers = allUsers.stream()
+                .filter(u -> u.getStatus() != null && u.getStatus() == 2)
+                .count();
+        
+        // 活跃卖家数（有上架商品且状态正常的卖家）
+        Set<Long> activeSellerIds = allGoods.stream()
+                .filter(g -> g.getStatus() != null && g.getStatus() == 1)
+                .map(Goods::getSellerId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
         
         long totalRefunds = allOrders.stream()
                 .filter(o -> o.getAfterSaleStatus() != null && o.getAfterSaleStatus() > 0)
@@ -59,7 +83,6 @@ public class StatisticsController {
                 .filter(o -> o.getStatus() == 3) // 只统计已完成的订单
                 .collect(Collectors.groupingBy(Order::getGoodsId, Collectors.counting()));
 
-        List<Goods> allGoods = goodsMapper.findAll();
         List<Map<String, Object>> popularGoods = allGoods.stream()
                 .map(g -> {
                     Map<String, Object> item = new HashMap<>();
@@ -78,6 +101,10 @@ public class StatisticsController {
         
         data.put("totalRevenue", totalRevenue);
         data.put("totalOrders", totalOrders);
+        data.put("completedOrders", completedOrders);
+        data.put("pendingOrders", pendingOrders);
+        data.put("bannedUsers", bannedUsers);
+        data.put("activeSellers", activeSellerIds.size());
         data.put("totalRefunds", totalRefunds);
         data.put("refundRate", refundRate);
         data.put("totalUsers", totalUsers);

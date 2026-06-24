@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, nextTick, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ArrowLeft } from '@element-plus/icons-vue';
+import { ArrowLeft, Delete, ChatDotRound } from '@element-plus/icons-vue';
 import { api } from '../../api';
-import { ElMessage, ElDialog, ElInput, ElButton, ElMessageBox, ElIcon } from 'element-plus';
+import { ElMessage, ElMessageBox, ElIcon, ElCard, ElEmpty, ElAvatar, ElInput, ElButton } from 'element-plus';
 
 const route = useRoute();
 const router = useRouter();
@@ -16,91 +16,105 @@ const currentMessage = ref<any>(null);
 const conversationId = ref<number | null>(null);
 const otherUserId = ref<number | null>(null);
 const otherUserName = ref('');
+// 聊天滚动容器ref
+const messageListRef = ref<HTMLDivElement | null>(null);
 
-onMounted(() => {
+// 页面挂载初始化
+onMounted(async () => {
   const userStr = localStorage.getItem('user');
-  if (userStr) {
-    user.value = JSON.parse(userStr);
-    // 从路由参数中获取会话ID和对方用户ID
-    const params = route.query;
-    if (params.conversationId && params.userId) {
-      conversationId.value = Number(params.conversationId);
-      otherUserId.value = Number(params.userId);
-      loadUserInfo(otherUserId.value);
-      loadConversationMessages();
-    } else {
-      // 如果没有路由参数，重定向到消息列表页面
-      router.push('/messages');
-    }
-  } else {
+  if (!userStr) {
     ElMessage.error('请先登录');
-    setTimeout(() => {
-      window.location.href = '/login';
-    }, 1000);
+    setTimeout(() => (window.location.href = '/login'), 1000);
+    return;
   }
+  user.value = JSON.parse(userStr);
+  const params = route.query;
+  if (!params.conversationId || !params.userId) {
+    router.push('/messages');
+    return;
+  }
+  conversationId.value = Number(params.conversationId);
+  otherUserId.value = Number(params.userId);
+  await loadUserInfo(otherUserId.value!);
+  await loadConversationMessages();
 });
 
+// 监听消息变化，自动滚动到底部
+watch(messages, async () => {
+  await nextTick();
+  scrollToBottom();
+});
+
+// 滚动聊天框至底部
+const scrollToBottom = () => {
+  if (!messageListRef.value) return;
+  messageListRef.value.scrollTop = messageListRef.value.scrollHeight;
+};
+
+// 加载对话消息列表
 const loadConversationMessages = async () => {
   if (!conversationId.value) return;
   try {
     const res = await api.getMessagesByConversationId(conversationId.value);
     if (res.data.code === 0) {
       messages.value = res.data.data || [];
-      // 标记所有接收的消息为已读
-      messages.value.forEach(message => {
+      // 批量加载用户信息 + 标记已读
+      messages.value.forEach((message) => {
         if (message.status === 0 && message.receiverId === user.value.id) {
           api.markAsRead(message.id);
         }
-        // 加载发送者信息
         loadUserInfo(message.senderId);
-        // 加载接收者信息（如果不是当前用户）
         if (message.receiverId !== user.value.id) {
           loadUserInfo(message.receiverId);
         }
       });
     }
   } catch (err) {
-    ElMessage.error('加载消息失败');
+    ElMessage.error('加载消息失败，请刷新重试');
   }
 };
 
+// 缓存加载用户信息，避免重复请求
 const loadUserInfo = async (userId: number) => {
-  if (!users.value.has(userId)) {
-    try {
-      const res = await api.userDetail(userId);
-      if (res.data.code === 0) {
-        users.value.set(userId, res.data.data);
-        // 如果是对方用户，设置对方用户名称
-        if (userId === otherUserId.value) {
-          otherUserName.value = res.data.data.nickname || res.data.data.username;
-        }
-      }
-    } catch (err) {
-      console.error('加载用户信息失败', err);
-    }
-  } else {
-    // 如果用户信息已存在，检查是否是对方用户
+  if (users.value.has(userId)) {
     if (userId === otherUserId.value) {
-      const userInfo = users.value.get(userId);
-      otherUserName.value = userInfo.nickname || userInfo.username;
+      const info = users.value.get(userId);
+      otherUserName.value = info.nickname || info.username;
     }
+    return;
+  }
+  try {
+    const res = await api.userDetail(userId);
+    if (res.data.code === 0) {
+      users.value.set(userId, res.data.data);
+      if (userId === otherUserId.value) {
+        otherUserName.value = res.data.data.nickname || res.data.data.username;
+      }
+    }
+  } catch (err) {
+    console.error('用户信息加载失败', err);
   }
 };
 
+// 获取用户昵称
 const getUserName = (userId: number) => {
   const userInfo = users.value.get(userId);
-  return userInfo ? (userInfo.nickname || userInfo.username) : '未知用户';
+  return userInfo ? userInfo.nickname || userInfo.username : '未知用户';
 };
 
+// 格式化时间
 const formatTime = (time: string) => {
-  return new Date(time).toLocaleString();
+  const date = new Date(time);
+  const h = String(date.getHours()).padStart(2, '0');
+  const m = String(date.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
 };
 
+// 打开回复弹窗（当前页面已内置输入框，此函数保留备用）
 const openReplyDialog = (message: any) => {
-  // 检查是否是自己给自己发的消息
-  const otherUserId = message.senderId === user.value.id ? message.receiverId : message.senderId;
-  if (otherUserId === user.value.id) {
-    ElMessage.warning('不能给自己发消息');
+  const targetId = message.senderId === user.value.id ? message.receiverId : message.senderId;
+  if (targetId === user.value.id) {
+    ElMessage.warning('不能给自己发送消息');
     return;
   }
   currentMessage.value = message;
@@ -108,253 +122,353 @@ const openReplyDialog = (message: any) => {
   dialogVisible.value = true;
 };
 
+// 发送消息
 const sendReply = async () => {
-  if (!replyContent.value.trim()) {
-    ElMessage.warning('请输入回复内容');
+  const content = replyContent.value.trim();
+  if (!content) {
+    ElMessage.warning('请输入聊天内容');
+    return;
+  }
+  if (!otherUserId.value) {
+    ElMessage.error('接收用户异常');
     return;
   }
   try {
-    if (!otherUserId.value) {
-      ElMessage.error('无法确定接收者');
-      return;
-    }
-    await api.sendMessage(user.value.id, otherUserId.value, replyContent.value);
-    ElMessage.success('消息已发送');
+    await api.sendMessage(user.value.id, otherUserId.value, content);
     replyContent.value = '';
-    loadConversationMessages();
+    await loadConversationMessages();
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.msg || '发送失败');
+    ElMessage.error(e?.response?.data?.msg || '消息发送失败');
   }
 };
 
+// 删除单条消息
 const deleteMessage = async (messageId: number, senderId: number) => {
   try {
-    await ElMessageBox.confirm('确定要删除这条消息吗？', '删除消息', {
-      confirmButtonText: '确定',
+    await ElMessageBox.confirm('确定删除本条消息？删除后不可恢复', '提示', {
+      confirmButtonText: '确认删除',
       cancelButtonText: '取消',
-      type: 'warning'
+      type: 'warning',
+      confirmButtonClass: 'del-msg-btn',
     });
     await api.deleteMessage(messageId, senderId);
     ElMessage.success('消息已删除');
-    loadMessages();
-  } catch (err) {
-    // 用户取消删除
+    loadConversationMessages();
+  } catch {
+    // 取消操作不提示
   }
 };
 
-const deleteConversation = async (conversationId: number) => {
+// 删除整个对话
+const deleteConversation = async (cid: number) => {
   try {
-    await ElMessageBox.confirm('确定要删除整个对话吗？', '删除对话', {
-      confirmButtonText: '确定',
+    await ElMessageBox.confirm('删除整个对话后，所有聊天记录将清空，是否继续？', '危险操作', {
+      confirmButtonText: '彻底删除',
       cancelButtonText: '取消',
-      type: 'warning'
+      type: 'error',
     });
-    await api.deleteConversation(user.value.id, conversationId);
+    await api.deleteConversation(user.value.id, cid);
     ElMessage.success('对话已删除');
-    loadMessages();
-  } catch (err) {
-    // 用户取消删除
-  }
+    router.push('/message-list');
+  } catch {}
 };
 
-// 按会话分组
+// 原有分组计算属性（当前页面未使用，保留兼容）
 const groupedMessages = computed(() => {
   const groups = new Map<number, any[]>();
-  messages.value.forEach(message => {
-    // 按会话ID分组
-    if (!groups.has(message.conversationId)) {
-      groups.set(message.conversationId, []);
-    }
-    groups.get(message.conversationId)?.push(message);
+  messages.value.forEach((msg) => {
+    if (!groups.has(msg.conversationId)) groups.set(msg.conversationId, []);
+    groups.get(msg.conversationId)!.push(msg);
   });
-  // 转换为数组并按最新消息时间排序
   return Array.from(groups.entries())
-    .map(([conversationId, msgs]) => {
-      // 按时间正序排列消息
-      msgs.sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
-      // 确定对话的对方用户ID
-      const otherUserId = msgs[0].senderId === user.value.id ? msgs[0].receiverId : msgs[0].senderId;
-      return {
-        conversationId,
-        userId: otherUserId,
-        userName: getUserName(otherUserId),
-        messages: msgs
-      };
-    })
-    .sort((a, b) => {
-      // 按最新消息时间倒序排列对话
-      const timeA = new Date(a.messages[a.messages.length - 1].createTime).getTime();
-      const timeB = new Date(b.messages[b.messages.length - 1].createTime).getTime();
-      return timeB - timeA;
-    });
+      .map(([cid, msgs]) => {
+        msgs.sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
+        const targetUid = msgs[0].senderId === user.value.id ? msgs[0].receiverId : msgs[0].senderId;
+        return {
+          conversationId: cid,
+          userId: targetUid,
+          userName: getUserName(targetUid),
+          messages: msgs,
+        };
+      })
+      .sort((a, b) => {
+        const t1 = new Date(a.messages.at(-1).createTime).getTime();
+        const t2 = new Date(b.messages.at(-1).createTime).getTime();
+        return t2 - t1;
+      });
 });
 </script>
 
 <template>
-  <div class="messages-container">
-    <!-- 聊天头部 -->
+  <div class="chat-page-wrap">
+    <!-- 顶部导航栏 -->
     <div class="chat-header">
-      <el-button type="primary" text @click="router.push('/message-list')">
-        <el-icon><ArrowLeft /></el-icon> 返回
+      <el-button text class="back-btn" @click="router.push('/message-list')">
+        <el-icon size="18"><ArrowLeft /></el-icon>
+        <span>返回会话列表</span>
       </el-button>
-      <h2>{{ otherUserName || '聊天' }}</h2>
-      <div class="chat-actions">
-        <el-button type="danger" size="small" @click="deleteConversation(conversationId)">删除对话</el-button>
+
+      <div class="chat-title">
+        <el-icon size="20" color="#409eff"><ChatDotRound /></el-icon>
+        <h2>{{ otherUserName }}</h2>
       </div>
+
+      <el-button text type="danger" class="del-conv-btn" @click="deleteConversation(conversationId!)">
+        <el-icon><Delete /></el-icon>
+        删除对话
+      </el-button>
     </div>
-    
-    <!-- 消息列表 -->
-    <el-card v-if="messages.length === 0" class="no-messages">
-      <el-empty description="暂无消息" />
-    </el-card>
-    <div v-else class="message-list">
-      <div v-for="message in messages" :key="message.id" class="message-item" :class="{ 'sent-message': message.senderId === user?.id }">
-        <div class="message-avatar">
-          <el-avatar :size="30">{{ message.senderId === user?.id ? '我' : otherUserName.charAt(0) }}</el-avatar>
-        </div>
-        <div class="message-content">
-          <div class="message-sender">{{ message.senderId === user?.id ? '我' : otherUserName }}</div>
-          <div class="message-text">{{ message.content }}</div>
-          <div class="message-footer">
-            <span class="message-time">{{ formatTime(message.createTime) }}</span>
-            <el-button v-if="message.senderId === user?.id" type="danger" size="small" @click="deleteMessage(message.id, message.senderId)">删除</el-button>
+
+    <!-- 聊天消息主体区域 -->
+    <div class="chat-main">
+      <!-- 空白消息状态 -->
+      <el-card v-if="messages.length === 0" class="empty-chat">
+        <el-empty description="暂无聊天记录，发送第一条消息开启对话" />
+      </el-card>
+
+      <!-- 消息滚动容器 -->
+      <div v-else ref="messageListRef" class="message-scroll">
+        <div v-for="msg in messages" :key="msg.id" class="message-item" :class="{ self: msg.senderId === user?.id }">
+          <!-- 对方头像 -->
+          <div class="avatar-box">
+            <el-avatar :size="36" fit="cover">
+              {{ msg.senderId === user?.id ? '我' : otherUserName.charAt(0) }}
+            </el-avatar>
+          </div>
+
+          <!-- 消息气泡 -->
+          <div class="bubble-wrap">
+            <!-- 发送者昵称（仅对方展示） -->
+            <div v-if="msg.senderId !== user?.id" class="sender-name">{{ otherUserName }}</div>
+            <div class="msg-bubble">
+              <p class="msg-text">{{ msg.content }}</p>
+              <div class="msg-bottom">
+                <span class="msg-time">{{ formatTime(msg.createTime) }}</span>
+                <el-button
+                    v-if="msg.senderId === user?.id"
+                    text
+                    size="small"
+                    class="del-btn"
+                    @click="deleteMessage(msg.id, msg.senderId)"
+                >
+                  删除
+                </el-button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
-    
-    <!-- 消息输入框 -->
-    <div class="message-input-container">
+
+    <!-- 底部输入区域 -->
+    <div class="chat-input-bar">
       <el-input
-        v-model="replyContent"
-        type="textarea"
-        :rows="2"
-        placeholder="请输入消息内容"
-        class="message-input"
+          v-model="replyContent"
+          type="textarea"
+          :rows="1"
+          autosize
+          placeholder="输入消息，回车发送..."
+          class="chat-input"
+          @keyup.enter="sendReply"
       />
-      <el-button type="primary" @click="sendReply" :disabled="!replyContent.trim()">发送</el-button>
+      <el-button type="primary" class="send-btn" :disabled="!replyContent.trim()" @click="sendReply">
+        发送
+      </el-button>
     </div>
   </div>
 </template>
 
 <style scoped>
-.messages-container {
-  padding: 20px;
-  max-width: 800px;
+/* 全局容器 */
+.chat-page-wrap {
+  width: 100%;
+  max-width: 900px;
   margin: 0 auto;
+  height: 92vh;
   display: flex;
   flex-direction: column;
-  min-height: 70vh;
+  background: #f7f8fa;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
 }
 
+/* 头部导航 */
 .chat-header {
   display: flex;
   align-items: center;
-  margin-bottom: 20px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #e4e7ed;
+  justify-content: space-between;
+  padding: 14px 20px;
+  background: #fff;
+  border-bottom: 1px solid #ebeef5;
 }
 
-.chat-header h2 {
+.back-btn {
+  color: #606266;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-title h2 {
   margin: 0;
-  font-size: 18px;
-  font-weight: bold;
-  flex: 1;
-  text-align: center;
+  font-size: 17px;
+  font-weight: 600;
+  color: #303133;
 }
 
-.chat-actions {
-  margin-left: auto;
+.del-conv-btn {
+  color: #f56c6c;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.no-messages {
-  margin-top: 20px;
+/* 聊天主体 */
+.chat-main {
   flex: 1;
+  padding: 16px 20px;
+  overflow: hidden;
+}
+
+.empty-chat {
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: none;
+  background: transparent;
 }
 
-.message-list {
-  padding: 10px 0;
-  flex: 1;
+/* 消息滚动区域 */
+.message-scroll {
+  height: 100%;
   overflow-y: auto;
-  margin-bottom: 20px;
+  padding-right: 8px;
+}
+/* 自定义滚动条 */
+.message-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.message-scroll::-webkit-scrollbar-thumb {
+  background: #dcdfe6;
+  border-radius: 3px;
+}
+.message-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
+/* 单条消息 */
 .message-item {
   display: flex;
-  margin-bottom: 15px;
+  gap: 10px;
+  margin-bottom: 18px;
   align-items: flex-start;
 }
-
-.message-item.sent-message {
+/* 自己发的消息右对齐 */
+.message-item.self {
   flex-direction: row-reverse;
 }
 
-.message-avatar {
-  margin: 0 10px;
+.avatar-box {
+  flex-shrink: 0;
 }
 
-.message-content {
-  max-width: 70%;
-  padding: 10px 15px;
-  border-radius: 18px;
-  background-color: #f0f0f0;
-  position: relative;
+.bubble-wrap {
+  max-width: 68%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.message-item.sent-message .message-content {
-  background-color: #409eff;
-  color: white;
-}
-
-.message-sender {
+/* 对方昵称 */
+.sender-name {
   font-size: 12px;
-  font-weight: bold;
-  margin-bottom: 5px;
-  color: #666;
+  color: #909399;
+  padding-left: 6px;
 }
 
-.message-item.sent-message .message-sender {
-  color: rgba(255, 255, 255, 0.8);
-  text-align: right;
+/* 消息气泡 */
+.msg-bubble {
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05);
+}
+.message-item.self .msg-bubble {
+  background: linear-gradient(135deg, #409eff, #66b1ff);
 }
 
-.message-text {
-  line-height: 1.5;
-  margin-bottom: 5px;
-  word-break: break-word;
+.msg-text {
+  margin: 0;
+  line-height: 1.6;
+  font-size: 14px;
+  word-break: break-all;
+  color: #303133;
+}
+.message-item.self .msg-text {
+  color: #ffffff;
 }
 
-.message-footer {
+/* 消息底部时间+删除 */
+.msg-bottom {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-top: 5px;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
 }
 
-.message-time {
-  font-size: 10px;
-  color: #999;
+.msg-time {
+  font-size: 11px;
+  color: #c0c4cc;
+}
+.message-item.self .msg-time {
+  color: rgba(255, 255, 255, 0.75);
 }
 
-.message-item.sent-message .message-time {
-  color: rgba(255, 255, 255, 0.6);
+.del-btn {
+  font-size: 11px;
+  color: #f56c6c;
+  padding: 0 4px;
+}
+.message-item.self .del-btn {
+  color: rgba(255, 255, 255, 0.85);
 }
 
-.message-input-container {
+/* 底部输入栏 */
+.chat-input-bar {
   display: flex;
-  gap: 10px;
-  padding-top: 10px;
-  border-top: 1px solid #e4e7ed;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  background: #fff;
+  border-top: 1px solid #ebeef5;
 }
 
-.message-input {
+.chat-input {
   flex: 1;
 }
-
-.message-input textarea {
+.chat-input :deep(.el-textarea__inner) {
+  border-radius: 22px;
+  padding: 10px 16px;
+  font-size: 14px;
+  border: 1px solid #e4e7ed;
   resize: none;
+}
+
+.send-btn {
+  height: 40px;
+  padding: 0 22px;
+  border-radius: 20px;
+  font-weight: 500;
 }
 </style>

@@ -10,6 +10,8 @@ public interface GoodsService {
 
     List<Goods> listOnSale();
 
+    List<Goods> listAll(); // 管理员获取所有商品
+
     List<Goods> search(String keyword);
 
     List<Goods> listBrands();

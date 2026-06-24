@@ -50,6 +50,8 @@ public class OrderDetailDTO {
     private Long couponId;
     private BigDecimal couponAmount;
 
+    private String paymentMethod;
+
     // 商品单价和运费
     private BigDecimal freight;
 

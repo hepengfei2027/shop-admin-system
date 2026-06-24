@@ -8,49 +8,55 @@ const router = useRouter();
 const user = inject('user', ref<any>(null));
 
 const orderId = ref('');
-const orderInfo = ref<any>(null);
+const orderIds = ref<number[]>([]);
+const orderInfoList = ref<any[]>([]);
 const showNotif = ref(false);
 const showSuccessAnimation = ref(false);
-const goodsInfo = ref<any>(null);
 
 const statusMap: Record<number, string> = {
   0: '待付款',
   1: '待发货',
   2: '待收货',
   3: '已完成',
-  4: '已取消'
+  4: '已取消',
+  5: '退货中'
 };
 
-const showMemberPrice = computed(() => {
-  const discount = user.value?.discount;
-  return discount !== undefined && discount !== null && discount < 1;
+const totalAmount = computed(() => {
+  return orderInfoList.value.reduce((sum, order) => sum + (Number(order.amount) || 0), 0);
 });
 
-const getMemberDiscount = () => {
-  return (user.value?.discount !== undefined && user.value?.discount !== null) ? user.value.discount : 1;
-};
+const totalQuantity = computed(() => {
+  return orderInfoList.value.reduce((sum, order) => sum + (Number(order.quantity) || 0), 0);
+});
 
-const loadGoodsInfo = async (goodsId: number) => {
-  try {
-    const res = await api.getGoodsDetail(goodsId);
-    if (res.data.code === 0) {
-      goodsInfo.value = res.data.data;
-    }
-  } catch (err) {
-    console.error('加载商品信息失败', err);
-  }
-};
+const totalPromotionDiscount = computed(() => {
+  return orderInfoList.value.reduce((sum, order) => sum + (Number(order.promotionDiscount) || 0), 0);
+});
+
+const totalCouponAmount = computed(() => {
+  return orderInfoList.value.reduce((sum, order) => sum + (Number(order.couponAmount) || 0), 0);
+});
 
 const loadOrderInfo = async () => {
   try {
     orderId.value = route.params.id as string;
-    const res = await api.getOrderInfo(orderId.value);
-    if (res.data.code === 0) {
-      orderInfo.value = res.data.data;
-      if (orderInfo.value?.goodsId) {
-        await loadGoodsInfo(orderInfo.value.goodsId);
+    
+    const orderIdsStr = route.query.orderIds as string;
+    if (orderIdsStr) {
+      orderIds.value = orderIdsStr.split(',').map(Number);
+    } else {
+      orderIds.value = [Number(orderId.value)];
+    }
+
+    const orders: any[] = [];
+    for (const id of orderIds.value) {
+      const res = await api.getOrderInfo(id);
+      if (res.data.code === 0 && res.data.data) {
+        orders.push(res.data.data);
       }
     }
+    orderInfoList.value = orders;
   } catch (err) {
     console.error('加载订单失败');
   }
@@ -95,47 +101,34 @@ onMounted(async () => {
     </div>
 
     <!-- 支付金额显示 -->
-  <div :class="['price-display', { show: showSuccessAnimation }]" v-if="orderInfo">
-    <div class="order-number">订单号：{{ orderId }}</div>
-    <div class="price-wrapper">
-      <div v-if="goodsInfo && showMemberPrice" class="original-price-line">
-        <span class="price-label-text">原价</span>
-        <span class="original-amount">￥{{ goodsInfo.price.toFixed(2) }}</span>
-      </div>
-      <!-- 营销活动优惠 -->
-      <div v-if="orderInfo.promotionDiscount && orderInfo.promotionDiscount > 0" class="promotion-discount-line">
-        <span class="price-label-text">
-          <span v-if="orderInfo.promotionType === 1">满减优惠</span>
-          <span v-if="orderInfo.promotionType === 2">限时折扣</span>
-          <span v-if="orderInfo.promotionType === 3">团购优惠</span>
-        </span>
-        <span class="promotion-discount">-￥{{ orderInfo.promotionDiscount.toFixed(2) }}</span>
-      </div>
-      <div v-if="orderInfo.couponAmount && orderInfo.couponAmount > 0" class="coupon-discount-line">
-        <span class="price-label-text">优惠券抵扣</span>
-        <span class="coupon-discount">-￥{{ orderInfo.couponAmount.toFixed(2) }}</span>
-      </div>
-      <div class="price-value">
-        <span class="currency">￥</span>
-        <span class="amount">{{ Number(orderInfo.amount).toFixed(2) }}</span>
-      </div>
-      <div v-if="showMemberPrice" class="member-price-info">
-        <span class="member-tag">会员价</span>
-        <span class="member-discount">({{ (getMemberDiscount() * 100).toFixed(0) }}折)</span>
-      </div>
-      <!-- 团购状态提示 -->
-      <div v-if="orderInfo.promotionType === 3 && orderInfo.groupStatus === 0" class="group-status-info">
-        <span class="group-tag">⏳ 等待拼团</span>
-        <span class="group-hint">拼团成功后订单将生效</span>
+    <div :class="['price-display', { show: showSuccessAnimation }]" v-if="orderInfoList.length > 0">
+      <div class="order-number">共 {{ orderInfoList.length }} 笔订单</div>
+      
+      <div class="price-wrapper">
+        <div class="price-row" v-if="totalPromotionDiscount > 0">
+          <span class="price-label-text">活动优惠</span>
+          <span class="price-value">-￥{{ totalPromotionDiscount.toFixed(2) }}</span>
+        </div>
+        <div class="price-row" v-if="totalCouponAmount > 0">
+          <span class="price-label-text">优惠券抵扣</span>
+          <span class="price-value">-￥{{ totalCouponAmount.toFixed(2) }}</span>
+        </div>
+        <div class="price-value">
+          <span class="currency">￥</span>
+          <span class="amount">{{ totalAmount.toFixed(2) }}</span>
+        </div>
+        <div class="quantity-info">共 {{ totalQuantity }} 件商品</div>
       </div>
     </div>
-  </div>
     
     <!-- 操作按钮 -->
     <div :class="['action-buttons', { show: showSuccessAnimation }]">
       <button class="btn btn-primary" @click="goHome">
         <span class="btn-icon"><</span>
-        返回
+        返回首页
+      </button>
+      <button class="btn btn-secondary" @click="goToOrders">
+        查看订单
       </button>
     </div>
     
@@ -254,7 +247,7 @@ onMounted(async () => {
 /* 价格显示 */
 .price-display {
   width: 100%;
-  max-width: 420px;
+  max-width: 500px;
   padding: 0;
   text-align: center;
   opacity: 0;
@@ -296,11 +289,11 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.original-price-line {
+.price-row {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  opacity: 0.7;
 }
 
 .price-label-text {
@@ -308,79 +301,17 @@ onMounted(async () => {
   color: #6b7280;
 }
 
-.original-amount {
-  font-size: 18px;
-  color: #9ca3af;
-  text-decoration: line-through;
-}
-
-.member-price-info {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.member-tag {
-  background: linear-gradient(135deg, #ff1744 0%, #ff5252 100%);
-  color: white;
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 12px;
+.price-row .price-value {
+  font-size: 16px;
+  color: #ef4444;
   font-weight: 600;
+  margin-bottom: 0;
 }
 
-.member-discount {
+.quantity-info {
   font-size: 14px;
-  color: #ff1744;
-  font-weight: 600;
-}
-
-.coupon-discount-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  opacity: 0.7;
-}
-
-.coupon-discount {
-  font-size: 18px;
-  color: #4caf50;
-  font-weight: 600;
-}
-
-.promotion-discount-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  opacity: 0.7;
-}
-
-.promotion-discount {
-  font-size: 18px;
-  color: #ff6700;
-  font-weight: 600;
-}
-
-.group-status-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  color: #9ca3af;
   margin-top: 8px;
-}
-
-.group-tag {
-  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
-  color: white;
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-weight: 600;
-}
-
-.group-hint {
-  font-size: 12px;
-  color: #909399;
 }
 
 .currency {
@@ -451,15 +382,13 @@ onMounted(async () => {
 }
 
 .btn-secondary {
-  background: white;
-  color: #374151;
-  border: 2px solid #e5e7eb;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
 }
 
 .btn-secondary:hover {
-  border-color: #d1d5db;
-  background: #f9fafb;
+  background: linear-gradient(135deg, #43a047 0%, #388e3c 100%);
   transform: translateY(-2px);
 }
 
@@ -537,10 +466,6 @@ onMounted(async () => {
   
   .success-title {
     font-size: 26px;
-  }
-  
-  .info-grid {
-    grid-template-columns: 1fr;
   }
   
   .action-buttons {

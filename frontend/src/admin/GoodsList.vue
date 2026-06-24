@@ -1,19 +1,82 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { api } from '../api';
-import { ElMessage, ElButton, ElMessageBox, ElTag } from 'element-plus';
+import { ElMessage, ElButton, ElMessageBox, ElTag, ElDropdown, ElDropdownMenu, ElDropdownItem, ElInput } from 'element-plus';
 
 const goodsList = ref<any[]>([]);
 const userList = ref<any[]>([]);
+const searchKeyword = ref('');
+
+// 状态筛选
+const statusFilter = ref<number | null>(null);
+const statusOptions = [
+  { value: null, label: '全部状态' },
+  { value: 0, label: '审核中' },
+  { value: 1, label: '已上架' },
+  { value: 2, label: '已下架' },
+  { value: 3, label: '已售出' }
+];
+
+// 筛选后的商品列表（倒序排列，最新在前）
+const filteredGoodsList = computed(() => {
+  let list = [...goodsList.value];
+  
+  // 搜索过滤
+  if (searchKeyword.value.trim()) {
+    const keyword = searchKeyword.value.trim().toLowerCase();
+    list = list.filter(goods => {
+      const title = String(goods.title || '').toLowerCase();
+      const description = String(goods.description || '').toLowerCase();
+      const goodsId = String(goods.id || '').toLowerCase();
+      const sellerName = String(getUserById(goods.sellerId) || '').toLowerCase();
+      return title.includes(keyword) || 
+             description.includes(keyword) || 
+             goodsId.includes(keyword) || 
+             sellerName.includes(keyword);
+    });
+  }
+  
+  // 状态筛选
+  if (statusFilter.value !== null) {
+    list = list.filter(goods => goods.status === statusFilter.value);
+  }
+  
+  return list.reverse();
+});
+
+// 获取当前筛选标签
+const currentFilterLabel = computed(() => {
+  const option = statusOptions.find(opt => opt.value === statusFilter.value);
+  return option ? option.label : '全部状态';
+});
+
+// 计算属性：数据统计
+const onSaleCount = computed(() => {
+  return goodsList.value.filter(g => g.status === 1).length;
+});
+
+const thisMonthNewCount = computed(() => {
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  return goodsList.value.filter(g => {
+    if (!g.createTime) return false;
+    const createDate = new Date(g.createTime);
+    return createDate.getMonth() === currentMonth && createDate.getFullYear() === currentYear;
+  }).length;
+});
+
+const totalSalesAmount = ref('--');
 
 onMounted(() => {
   loadGoodsList();
   loadUserList();
+  loadSalesData();
 });
 
 const loadGoodsList = async () => {
   try {
-    const res = await api.listGoods();
+    const res = await api.listAllGoods();
     if (res.data.code === 0) {
       goodsList.value = res.data.data || [];
     }
@@ -33,9 +96,48 @@ const loadUserList = async () => {
   }
 };
 
-// 编辑商品
-const editGoods = (goods: any) => {
-  ElMessage.info('编辑功能待实现');
+// 加载总销售额
+const loadSalesData = async () => {
+  try {
+    const res = await api.getStatisticsOverview();
+    if (res.data.code === 0) {
+      totalSalesAmount.value = res.data.data?.totalRevenue ?? '--';
+    }
+  } catch (err) {
+    // 销售数据获取失败，保持 '--'
+  }
+};
+
+// 下架商品
+const offShelfGoods = async (goods: any) => {
+  try {
+    await ElMessageBox.confirm('确定要下架这个商品吗？', '下架商品', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    });
+    await api.updateGoodsStatus(goods.id, 0); // 0 表示下架
+    ElMessage.success('商品已下架');
+    loadGoodsList();
+  } catch (err) {
+    // 用户取消或请求失败
+  }
+};
+
+// 上架商品
+const onShelfGoods = async (id: number) => {
+  try {
+    await ElMessageBox.confirm('确定要上架这个商品吗？', '上架商品', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'info'
+    });
+    await api.updateGoodsStatus(id, 1); // 1 表示上架
+    ElMessage.success('商品已上架');
+    loadGoodsList();
+  } catch (err) {
+    // 用户取消或请求失败
+  }
 };
 
 // 删除商品
@@ -73,6 +175,20 @@ const getUserById = (userId: number) => {
         </div>
       </div>
       <div class="header-right">
+        <el-input
+            v-model="searchKeyword"
+            placeholder="搜索商品名称/描述/ID/卖家"
+            size="small"
+            class="search-input"
+            @keyup.enter="loadGoodsList"
+        >
+          <template #prefix>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+          </template>
+        </el-input>
         <el-button type="primary" @click="loadGoodsList">
           🔄 刷新列表
         </el-button>
@@ -89,19 +205,19 @@ const getUserById = (userId: number) => {
       </el-col>
       <el-col :xs="12" :sm="6">
         <div class="stat-box">
-          <div class="stat-number">--</div>
+          <div class="stat-number">{{ onSaleCount }}</div>
           <div class="stat-label">在售商品</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="6">
         <div class="stat-box">
-          <div class="stat-number">--</div>
+          <div class="stat-number">{{ thisMonthNewCount }}</div>
           <div class="stat-label">本月新增</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="6">
         <div class="stat-box">
-          <div class="stat-number">--</div>
+          <div class="stat-number">¥{{ totalSalesAmount }}</div>
           <div class="stat-label">总销售额</div>
         </div>
       </el-col>
@@ -109,9 +225,9 @@ const getUserById = (userId: number) => {
 
     <!-- 商品列表 -->
     <el-card class="table-card">
-      <el-table 
-        :data="goodsList" 
-        style="width: 100%" 
+      <el-table
+        :data="filteredGoodsList"
+        style="width: 100%"
         stripe
         v-loading="false"
       >
@@ -142,15 +258,55 @@ const getUserById = (userId: number) => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" width="130">
+          <template #header>
+            <el-dropdown trigger="click" @command="(val: number | null) => statusFilter = val">
+              <span class="status-filter-header">
+                状态
+                <span class="filter-indicator" :class="{ active: statusFilter !== null }">
+                  🔽
+                </span>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="opt in statusOptions"
+                    :key="opt.label"
+                    :command="opt.value"
+                    :class="{ 'is-active': statusFilter === opt.value }"
+                  >
+                    {{ opt.label }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
           <template #default="scope">
-            <el-tag type="success" size="small">已上架</el-tag>
+            <el-tag
+              :type="scope.row.status === 1 ? 'success' : scope.row.status === 0 ? 'warning' : 'info'"
+              size="small"
+            >
+              {{ scope.row.status === 0 ? '审核中' : scope.row.status === 1 ? '已上架' : scope.row.status === 2 ? '已下架' : '已售出' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="scope">
-            <el-button type="primary" size="small" @click="editGoods(scope.row)">
-              编辑
+            <el-button
+              v-if="scope.row.status === 1"
+              type="warning"
+              size="small"
+              @click="offShelfGoods(scope.row)"
+            >
+              下架
+            </el-button>
+            <el-button
+              v-else-if="scope.row.status === 2"
+              type="success"
+              size="small"
+              @click="onShelfGoods(scope.row.id)"
+            >
+              上架
             </el-button>
             <el-button type="danger" size="small" @click="deleteGoods(scope.row.id)">
               删除
@@ -196,6 +352,15 @@ const getUserById = (userId: number) => {
   font-size: 14px;
   color: #6b7280;
   margin: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.search-input {
+  width: 240px;
 }
 
 /* 快速统计 */
@@ -281,5 +446,32 @@ const getUserById = (userId: number) => {
   font-size: 16px;
   font-weight: 700;
   color: #ef4444;
+}
+
+/* 状态筛选表头 */
+.status-filter-header {
+  cursor: pointer;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-filter-header:hover {
+  color: #409eff;
+}
+
+.filter-indicator {
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.filter-indicator.active {
+  color: #409eff;
+}
+
+:deep(.el-dropdown-menu__item.is-active) {
+  color: #409eff;
+  font-weight: 600;
 }
 </style>

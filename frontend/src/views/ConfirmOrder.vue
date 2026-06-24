@@ -19,6 +19,25 @@ const userCoupons = ref<any[]>([]);
 const selectedCoupon = ref<any>(null);
 const showCouponSelect = ref(false);
 
+// 用户余额
+const userBalance = ref(0);
+const loadingBalance = ref(false);
+
+const loadUserBalance = async () => {
+  if (!user.value?.id) return;
+  loadingBalance.value = true;
+  try {
+    const res = await api.getUserBalance(user.value.id);
+    if (res.data.code === 0) {
+      userBalance.value = Number(res.data.data || 0);
+    }
+  } catch (err) {
+    console.error('加载余额失败', err);
+  } finally {
+    loadingBalance.value = false;
+  }
+};
+
 // 团购相关
 const groupBuyInfo = ref<any>(null);
 const isGroupBuyOrder = computed(() => !!groupBuyInfo.value);
@@ -146,6 +165,13 @@ const paymentMethods = [
   { value: 'balance', label: '余额支付', icon: '💰' }
 ];
 
+// 余额是否足够
+const isBalanceEnough = computed(() => userBalance.value >= totalAmount.value);
+// 当前选中支付方式时是否余额不足
+const showBalanceInsufficient = computed(() => {
+  return selectedPaymentMethod.value === 'balance' && !isBalanceEnough.value;
+});
+
 const formatDateTime = (dateStr: string) => {
   if (!dateStr) return '';
   const date = new Date(dateStr);
@@ -268,6 +294,16 @@ const loadDefaultAddress = async () => {
     const res = await api.getAddresses(user.value.id);
     if (res.data.code === 0) {
       const addresses = res.data.data || [];
+      // 优先使用URL参数中的addressId
+      const addressIdFromUrl = route.query.addressId;
+      if (addressIdFromUrl) {
+        const selectedAddr = addresses.find((a: any) => a.id == addressIdFromUrl);
+        if (selectedAddr) {
+          selectedAddress.value = selectedAddr;
+          return;
+        }
+      }
+      // 其次使用默认地址
       const defaultAddr = addresses.find((a: any) => a.isDefault);
       if (defaultAddr) {
         selectedAddress.value = defaultAddr;
@@ -355,72 +391,103 @@ const handleSubmit = async () => {
     return;
   }
 
+  // 余额支付前置校验
+  if (selectedPaymentMethod.value === 'balance') {
+    if (userBalance.value < totalAmount.value) {
+      ElMessage.error('余额不足，请选择其他支付方式或先充值');
+      return;
+    }
+  }
+
   isPaying.value = true;
 
   try {
-    const couponId = selectedCoupon.value?.id || null;
+    const createdOrderIds: number[] = [];
     
-    // 构建促销信息
-    let promotionType = null;
-    let promotionId = null;
-    let promotionDiscount = null;
-    
-    if (groupBuyInfo.value) {
-      promotionType = 3;
-      promotionId = groupBuyInfo.value.groupBuyId;
-      const originalTotal = cartItems.value.reduce((total, item) => {
-        return total + (item.price || 0) * item.quantity;
-      }, 0);
-      const groupTotal = groupBuyInfo.value.groupPrice * cartItems.value[0].quantity;
-      promotionDiscount = parseFloat((originalTotal - groupTotal).toFixed(2));
-    } else if (discountActivity.value) {
-      promotionType = 2;
-      promotionId = discountActivity.value.id;
-      promotionDiscount = parseFloat(((goodsOriginalTotal.value * getMemberDiscount() - discountedGoodsTotal.value)).toFixed(2));
-    }
-    
-    // 满减活动可以与限时折扣叠加
-    if (fullReduceActivity.value && fullReduceAmount.value > 0 && !groupBuyInfo.value) {
-      promotionType = 1;
-      promotionId = fullReduceActivity.value.id;
-      promotionDiscount = fullReduceAmount.value;
-    }
-    
-    const orderRes = await api.createOrder(
-      cartItems.value[0].id, 
-      user.value.id, 
-      selectedAddress.value.id, 
-      cartItems.value[0].quantity, 
-      couponId,
-      promotionType,
-      promotionId,
-      promotionDiscount
-    );
-
-    if (orderRes.data.code === 0) {
-      const orderId = orderRes.data.data.id;
-
-      await api.payOrderV2(orderId, user.value.id);
-
-      if (!route.query.goodsId && !route.query.goodsIds) {
-        localStorage.removeItem(getCartKey());
+    for (const item of cartItems.value) {
+      const couponId = selectedCoupon.value?.id || null;
+      
+      let promotionType = null;
+      let promotionId = null;
+      let promotionDiscount = null;
+      
+      if (groupBuyInfo.value) {
+        promotionType = 3;
+        promotionId = groupBuyInfo.value.groupBuyId;
+        const originalTotal = (item.price || 0) * item.quantity;
+        const groupTotal = groupBuyInfo.value.groupPrice * item.quantity;
+        promotionDiscount = parseFloat((originalTotal - groupTotal).toFixed(2));
+      } else if (discountActivity.value) {
+        promotionType = 2;
+        promotionId = discountActivity.value.id;
+        promotionDiscount = parseFloat((((item.price || 0) * getMemberDiscount() - (item.price || 0) * getMemberDiscount() * (discountActivity.value.ruleDetail?.discountRate || 1)) * item.quantity).toFixed(2));
       }
+      
+      if (fullReduceActivity.value && fullReduceAmount.value > 0 && !groupBuyInfo.value) {
+        promotionType = 1;
+        promotionId = fullReduceActivity.value.id;
+        promotionDiscount = fullReduceAmount.value;
+      }
+      
+      const orderRes = await api.createOrder(
+        item.id, 
+        user.value.id, 
+        selectedAddress.value.id, 
+        item.quantity, 
+        couponId,
+        promotionType,
+        promotionId,
+        promotionDiscount
+      );
 
-      setTimeout(() => {
-        router.push(`/payment-success/${orderId}`);
-      }, 1500);
-    } else {
-      ElMessage.error(orderRes.data.msg || '下单失败');
-      isPaying.value = false;
+      if (orderRes.data.code === 0) {
+        const orderId = orderRes.data.data.id;
+        createdOrderIds.push(orderId);
+        
+        // 使用带支付方式的接口（支持余额）
+        await api.payOrderWithMethod(orderId, user.value.id, selectedPaymentMethod.value);
+      } else {
+        ElMessage.error(orderRes.data.msg || '下单失败');
+        isPaying.value = false;
+        return;
+      }
     }
+
+    if (!route.query.goodsId && !route.query.goodsIds) {
+      localStorage.removeItem(getCartKey());
+    }
+
+    // 余额支付后刷新余额
+    if (selectedPaymentMethod.value === 'balance') {
+      await loadUserBalance();
+      // 同步本地存储中的用户信息
+      if (user.value) {
+        user.value.balance = userBalance.value;
+        localStorage.setItem('user', JSON.stringify(user.value));
+      }
+    }
+
+    setTimeout(() => {
+      if (createdOrderIds.length > 0) {
+        router.push(`/payment-success/${createdOrderIds[0]}?orderIds=${createdOrderIds.join(',')}`);
+      }
+    }, 1500);
   } catch (err: any) {
-    ElMessage.error(err?.response?.data?.msg || '支付失败');
+    const msg = err?.response?.data?.msg || '支付失败';
+    if (msg.includes('余额不足')) {
+      ElMessage.error('余额不足');
+      // 刷新余额
+      await loadUserBalance();
+    } else {
+      ElMessage.error(msg);
+    }
     isPaying.value = false;
   }
 };
 
 onMounted(() => {
   loadCartItems();
+  loadUserBalance();
 });
 </script>
 
@@ -548,18 +615,29 @@ onMounted(() => {
             <div
               v-for="method in paymentMethods"
               :key="method.value"
-              :class="['payment-item', { selected: selectedPaymentMethod === method.value }]"
-              @click="selectedPaymentMethod = method.value"
+              :class="['payment-item', { selected: selectedPaymentMethod === method.value, disabled: method.value === 'balance' && !isBalanceEnough }]"
+              @click="method.value !== 'balance' || isBalanceEnough ? (selectedPaymentMethod = method.value) : null"
             >
               <div class="payment-icon-wrapper">
                 <span class="payment-icon">{{ method.icon }}</span>
               </div>
-              <span class="payment-name">{{ method.label }}</span>
+              <div class="payment-info">
+                <span class="payment-name">{{ method.label }}</span>
+                <span v-if="method.value === 'balance'" class="payment-balance">
+                  余额：¥{{ userBalance.toFixed(2) }}
+                </span>
+              </div>
               <div class="payment-check" v-if="selectedPaymentMethod === method.value">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                   <path d="M20 6L9 17L4 12" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </div>
+              <div v-else-if="method.value === 'balance' && !isBalanceEnough" class="payment-warn-tag">
+                余额不足
+              </div>
+            </div>
+            <div v-if="showBalanceInsufficient" class="balance-tip">
+              当前余额 ¥{{ userBalance.toFixed(2) }} 不足以支付 ¥{{ totalAmount.toFixed(2) }}，请先充值或选择其他支付方式
             </div>
           </div>
         </div>
@@ -636,7 +714,7 @@ onMounted(() => {
           </div>
 
           <div class="action-section">
-            <button class="pay-btn" :disabled="isPaying || !selectedAddress" @click="handleSubmit">
+            <button class="pay-btn" :disabled="isPaying || !selectedAddress || showBalanceInsufficient" @click="handleSubmit">
               <span v-if="isPaying" class="paying-text">
                 <svg class="loading-spinner" width="20" height="20" viewBox="0 0 24 24" fill="none">
                   <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="50 50"/>
@@ -1081,7 +1159,7 @@ h3 {
   position: relative;
 }
 
-.payment-item:hover {
+.payment-item:hover:not(.disabled) {
   border-color: #ff6700;
   background: #fffaf5;
 }
@@ -1089,6 +1167,12 @@ h3 {
 .payment-item.selected {
   border-color: #ff6700;
   background: #fffaf5;
+}
+
+.payment-item.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #fafafa;
 }
 
 .payment-icon-wrapper {
@@ -1106,11 +1190,22 @@ h3 {
   font-size: 28px;
 }
 
-.payment-name {
+.payment-info {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.payment-name {
   font-size: 16px;
   font-weight: 500;
   color: #303133;
+}
+
+.payment-balance {
+  font-size: 12px;
+  color: #909399;
 }
 
 .payment-check {
@@ -1121,6 +1216,25 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.payment-warn-tag {
+  padding: 2px 8px;
+  background: #fef0f0;
+  color: #f56c6c;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.balance-tip {
+  grid-column: span 2;
+  padding: 10px 14px;
+  background: #fef0f0;
+  color: #f56c6c;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .price-summary {
